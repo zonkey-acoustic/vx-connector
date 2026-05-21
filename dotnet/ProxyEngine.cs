@@ -5,7 +5,7 @@ using System.Text.Json;
 
 namespace VxProxy;
 
-public enum ConnectionStatus { Stopped, Listening, ProTeeOnly, Connected }
+public enum ConnectionStatus { Stopped, Listening, ProTeeOnly, Connected, Direct }
 
 public record ShotInfo(
     int ShotNumber,
@@ -32,6 +32,13 @@ public class ProxyEngine : IDisposable
     public int ShotCount { get; private set; }
     public bool IsRunning { get; private set; }
 
+    /// <summary>
+    /// When true, Start() skips binding the listen port. The process still
+    /// runs so ProTee Labs's GSPconnect.exe pre-check passes, but Infinite
+    /// Tees is expected to be listening on <see cref="ListenPort"/> itself.
+    /// </summary>
+    public bool DirectMode { get; set; }
+
     /// <summary>Fired on every log line (already timestamped).</summary>
     public event Action<string>? Log;
 
@@ -43,6 +50,7 @@ public class ProxyEngine : IDisposable
 
     public ConnectionStatus Status =>
         !IsRunning ? ConnectionStatus.Stopped :
+        DirectMode ? ConnectionStatus.Direct :
         _proTeeConnected && _infiniteTeesConnected ? ConnectionStatus.Connected :
         _proTeeConnected ? ConnectionStatus.ProTeeOnly :
         ConnectionStatus.Listening;
@@ -50,6 +58,15 @@ public class ProxyEngine : IDisposable
     public bool Start()
     {
         if (IsRunning) return true;
+
+        if (DirectMode)
+        {
+            IsRunning = true;
+            Emit($"Direct mode — not binding port {ListenPort}.");
+            Emit($"ProTee Labs will connect straight to Infinite Tees on :{ListenPort}.");
+            OnStatusChanged();
+            return true;
+        }
 
         try
         {

@@ -194,6 +194,8 @@ public class MainForm : Form
                 (Color.FromArgb(255, 193, 7), "ProTee Labs: Connected | Infinite Tees: Disconnected"),
             ConnectionStatus.Listening =>
                 (Color.FromArgb(255, 152, 0), "Listening — waiting for ProTee Labs"),
+            ConnectionStatus.Direct =>
+                (Color.FromArgb(33, 150, 243), "Direct mode — ProTee Labs talks straight to Infinite Tees"),
             _ =>
                 (Color.FromArgb(244, 67, 54), "Stopped"),
         };

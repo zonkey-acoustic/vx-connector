@@ -7,9 +7,9 @@ public class TrayApplicationContext : ApplicationContext
     private readonly MainForm _form;
     private ConnectionStatus _currentStatus;
 
-    public TrayApplicationContext()
+    public TrayApplicationContext(bool directMode = false)
     {
-        _engine = new ProxyEngine();
+        _engine = new ProxyEngine { DirectMode = directMode };
         _form = new MainForm(_engine);
 
         _tray = new NotifyIcon
@@ -39,6 +39,8 @@ public class TrayApplicationContext : ApplicationContext
                 (Color.FromArgb(255, 193, 7), "VX Proxy — Infinite Tees disconnected"),
             ConnectionStatus.Listening =>
                 (Color.FromArgb(255, 152, 0), "VX Proxy — Waiting for ProTee Labs"),
+            ConnectionStatus.Direct =>
+                (Color.FromArgb(33, 150, 243), "VX Proxy — Direct mode (passthrough)"),
             _ =>
                 (Color.FromArgb(244, 67, 54), "VX Proxy — Stopped"),
         };

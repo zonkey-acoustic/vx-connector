@@ -3,22 +3,16 @@ namespace VxProxy;
 static class Program
 {
     [STAThread]
-    static void Main()
+    static void Main(string[] args)
     {
         ApplicationConfiguration.Initialize();
 
-        if (IsInfiniteTeesOnPort921())
-        {
-            MessageBox.Show(
-                "Infinite Tees is already configured to listen on port 921.\n\n" +
-                "ProTee Labs will connect directly to Infinite Tees — the proxy is not needed.",
-                "VX Connector",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
-            return;
-        }
+        bool directMode = args.Any(a =>
+            a.Equals("--direct", StringComparison.OrdinalIgnoreCase) ||
+            a.Equals("-d", StringComparison.OrdinalIgnoreCase))
+            || IsInfiniteTeesOnPort921();
 
-        Application.Run(new TrayApplicationContext());
+        Application.Run(new TrayApplicationContext(directMode));
     }
 
     private static bool IsInfiniteTeesOnPort921()

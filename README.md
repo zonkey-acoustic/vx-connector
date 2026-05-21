@@ -58,28 +58,6 @@ ProTee Labs software communicates with sim applications using the **OpenConnect 
 
 VX Connector listens on port 921 (where ProTee Labs expects to connect), logs each shot, and forwards everything to Infinite Tees on port 999. If Infinite Tees is unavailable, the proxy generates its own acknowledgement responses so ProTee Labs keeps running normally.
 
-## Advaced: Direct Connection (No Proxy)
-
-Instead of running VX Connector as a middleman, you can change the port Infinite Tees listens on so ProTee Labs connects to it directly:
-
-```
-ProTee VX  →  ProTee Labs Software  →  Infinite Tees (:921)
-```
-
-Run the included script to update the Infinite Tees config:
-
-```powershell
-# Set port to 921 (direct connection, no proxy needed)
-powershell -ExecutionPolicy Bypass -File scripts/set-itees-port.ps1
-
-# Reset port back to 999 (use with proxy)
-powershell -ExecutionPolicy Bypass -File scripts/set-itees-port.ps1 -Reset
-```
-
-This modifies `Port` in `%LOCALAPPDATA%\InfiniteTees\Saved\Config\Windows\GameUserSettings.ini`.
-
-With port 921, launch Infinite Tees first, then open ProTee Labs and hit **Connect** — it will connect directly to Infinite Tees without needing the proxy.
-
 ## Note: ## 
 
 This unofficial integration is community-developed and provided as-is, without official support from the respective brands.
