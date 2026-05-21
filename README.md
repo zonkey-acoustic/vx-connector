@@ -72,6 +72,8 @@ VX Connector listens on port 921 (where ProTee Labs expects to connect), logs ea
 
 This unofficial integration is community-developed and provided as-is, without official support from the respective brands.
 
+Tested against ProTee Labs v1.12.3 beta and should also work with stable release 1.11.6
+
 ## License
 
 MIT
