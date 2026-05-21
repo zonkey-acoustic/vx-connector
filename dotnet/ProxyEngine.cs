@@ -112,12 +112,11 @@ public class ProxyEngine : IDisposable
         _proTeeConnected = true;
         OnStatusChanged();
 
+        // Try Infinite Tees once up front, but don't block on retries — the read
+        // loop below handles per-message reconnects and falls back to auto-generated
+        // responses when Infinite Tees is unavailable. Blocking here would leave
+        // ProTee Labs without any responses to its messages.
         TcpClient? infiniteTees = await ConnectToInfiniteTeesAsync();
-        while (!_infiniteTeesConnected && !ct.IsCancellationRequested)
-        {
-            await Task.Delay(3000, ct).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
-            infiniteTees = await ConnectToInfiniteTeesAsync();
-        }
 
         var buffer = new StringBuilder();
 

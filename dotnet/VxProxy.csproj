@@ -6,8 +6,18 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>VxProxy</RootNamespace>
-    <AssemblyName>VxProxy</AssemblyName>
+    <AssemblyName>GSPconnect</AssemblyName>
     <ApplicationIcon Condition="Exists('vx-proxy.ico')">vx-proxy.ico</ApplicationIcon>
+    <!-- Version info mirroring the real C:\GSPro\Core\GSPC\GSPconnect.exe so ProTee Labs's
+         GSPro-running pre-check passes. -->
+    <Product>VGPconnect</Product>
+    <AssemblyTitle>VGPconnect</AssemblyTitle>
+    <Version>1.0.0.0</Version>
+    <FileVersion>1.0.0.0</FileVersion>
+    <InformationalVersion>1.0.0.0</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <Copyright>Copyright ©  2020</Copyright>
+    <Company> </Company>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

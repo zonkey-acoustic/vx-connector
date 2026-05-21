@@ -10,9 +10,9 @@ ProTee Labs software sends shot data (ball speed, spin, launch angle, club data)
 
 ## Quick Start
 
-1. **Download** `VxProxy.exe` from the [latest release](https://github.com/zonkey-acoustic/itees-vx-connector/releases/latest) (or build from source — see below).
+1. **Download** `GSPconnect.exe` from the [latest release](https://github.com/zonkey-acoustic/itees-vx-connector/releases/latest) (or build from source — see below).
 
-2. **Launch VX Connector first** — double-click `VxProxy.exe`. It starts in the system tray with an orange icon (waiting for connections).
+2. **Launch VX Connector first** — double-click `GSPconnect.exe`. It starts in the system tray with an orange icon (waiting for connections).
 
 3. **Launch Infinite Tees** — once it's running, VX Connector will automatically connect to it on port 999.
 
@@ -45,7 +45,7 @@ dotnet run                      # Run in development mode
 dotnet publish -c Release       # Build standalone exe
 ```
 
-The published exe is at `dotnet/bin/Release/net8.0-windows/win-x64/publish/VxProxy.exe` — single file, no .NET runtime required on the target machine.
+The published exe is at `dotnet/bin/Release/net8.0-windows/win-x64/publish/GSPconnect.exe` — single file, no .NET runtime required on the target machine.
 
 ## How It Works
 
