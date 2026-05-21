@@ -22,6 +22,16 @@ ProTee Labs software sends shot data (ball speed, spin, launch angle, club data)
 
 > **Important:** VX Connector must be running *before* you hit Connect in ProTee Labs. ProTee Labs expects something listening on port 921 when it connects.
 
+### Upgrading from an earlier release
+
+If you previously used an older script to change the Infinite Tees listening port to 921 for a direct connection, run `scripts/reset-itees-port.ps1` once before starting the new version:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/reset-itees-port.ps1
+```
+
+Then restart Infinite Tees. (If you skip this step VX Proxy will still work, just in passthrough mode rather than as a full proxy.)
+
 ## System Tray
 
 The tray icon shows connection status at a glance:
