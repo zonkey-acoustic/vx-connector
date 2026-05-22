@@ -24,12 +24,12 @@ ProTee VX  →  ProTee Labs  →  ProTeeUnited\Shots\* (on disk)
 1. **Download** `GSPconnect.exe` from the [latest release](https://github.com/zonkey-acoustic/itees-vx-connector/releases/latest) (or build from source — see below).
 
 2. **Configure your simulator to listen on port 921:**
-   - **Infinite Tees** — right-click VX Connector's tray icon and pick **"Switch Infinite Tees to Direct mode (port 921)"**, then restart iTees. (You can also run `scripts/set-itees-port.ps1` manually.)
+   - **Infinite Tees** — right-click VX Connector's tray icon and pick **"Switch Infinite Tees to Direct mode (port 921)"**, then restart Infinite Tees. (You can also run `scripts/set-itees-port.ps1` manually.)
    - **Drills** — Drills's helper already listens on port 921 by default. Confirm in `C:\Program Files\DrillsGolfSimulator\Drills\DrillsConnect\settings.json` if you'd like (`openConnect.port` should be `921`).
 
 3. **Launch VX Connector first** — double-click `GSPconnect.exe`. The tray icon appears blue with the detected sim in its tooltip (e.g. *"VX Proxy — Direct mode (Infinite Tees)"*).
 
-4. **Launch your simulator** (iTees or Drills).
+4. **Launch your simulator** (Infinite Tees or Drills).
 
 5. **Launch ProTee Labs**, go to **Game Options → Game: GSPro**, and hit **Connect**. ProTee Labs talks straight to your sim on port 921; VX Connector just keeps existing so the gate stays open.
 
@@ -47,7 +47,7 @@ You can switch back to Direct mode from the same menu without restarting.
 
 ### Upgrading from an earlier release
 
-If you ran older versions of VX Connector that configured iTees on port 999, run `scripts/reset-itees-port.ps1` once before starting the new version, or use the tray menu's iTees switcher. iTees needs to be on **921** for Direct mode to work end-to-end.
+If you ran older versions of VX Connector that configured Infinite Tees on port 999, run `scripts/reset-itees-port.ps1` once before starting the new version, or use the tray menu's Infinite Tees switcher. Infinite Tees needs to be on **921** for Direct mode to work end-to-end.
 
 ## System Tray
 
@@ -61,7 +61,7 @@ Hover the tray icon for the detected sim and forward target. Double-click to ope
 
 - **Show Log** — open the log window
 - **Switch to Direct mode** / **Switch to Folder Watcher mode** — toggle modes at runtime
-- **Switch Infinite Tees to Direct mode (port 921)** — only visible when iTees is currently on 999
+- **Switch Infinite Tees to Direct mode (port 921)** — only visible when Infinite Tees is currently on 999
 - **Quit** — exit VX Connector
 
 VX Connector also enforces single-instance: launching it again will kill any prior instance running from the same binary path.
@@ -83,7 +83,7 @@ The published exe is at `dotnet/bin/Release/net8.0-windows/win-x64/publish/GSPco
 ProTee Labs's "Connect" action runs a pre-flight check that requires a process named `GSPconnect.exe` to be in the process list. Once that gate passes, ProTee Labs opens a TCP connection to its target simulator and sends shot data using the **OpenConnect API** — newline-terminated JSON over raw TCP. VX Connector's role is to satisfy the pre-flight check; the rest depends on the mode:
 
 - **Direct mode**: VX Connector binds no port and forwards nothing. Your sim listens on port 921 and receives ProTee Labs's traffic directly.
-- **Folder Watcher mode**: VX Connector watches the folder ProTee Labs writes each shot's `ShotData.json` into, converts that data to the OpenConnect format, and forwards it to whichever sim is configured. The destination is re-resolved per shot (so toggling iTees direct/proxy mid-session is fine).
+- **Folder Watcher mode**: VX Connector watches the folder ProTee Labs writes each shot's `ShotData.json` into, converts that data to the OpenConnect format, and forwards it to whichever sim is configured. The destination is re-resolved per shot (so toggling Infinite Tees direct/proxy mid-session is fine).
 
 VX Connector's executable is named and version-stamped to match `C:\GSPro\Core\GSPC\GSPconnect.exe` so ProTee Labs's process-name gate accepts it. It does not impersonate the licensed GSPro Connect for any deeper purpose; ProTee Labs routes to a separate, unauthenticated code path when our impersonator is present.
 

@@ -73,7 +73,7 @@ public class ProxyEngine : IDisposable
             IsRunning = true;
             var (sim, port) = SimConfig.GetForwardTarget();
             Emit($"Folder watcher mode — forwarding shots to {sim} at {ForwardHost}:{port}.");
-            Emit("(Target re-resolved per shot, so toggling iTees direct mode mid-session is fine.)");
+            Emit("(Target re-resolved per shot, so toggling Infinite Tees direct mode mid-session is fine.)");
             OnStatusChanged();
             return true;
         }

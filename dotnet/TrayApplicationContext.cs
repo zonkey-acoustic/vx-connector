@@ -161,7 +161,7 @@ public class TrayApplicationContext : ApplicationContext
         const int oldPort = 999;
 
         var prompt = $"Change the Infinite Tees listening port from {oldPort} to {newPort}?\n\n" +
-                     "This puts iTees on the port ProTee Labs sends to, so Direct mode works without VX Proxy in the data path.\n" +
+                     "This puts Infinite Tees on the port ProTee Labs sends to, so Direct mode works without VX Proxy in the data path.\n" +
                      "You'll need to restart Infinite Tees for the change to take effect.";
 
         var result = MessageBox.Show(

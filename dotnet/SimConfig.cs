@@ -18,7 +18,7 @@ public static class SimConfig
 
     private static readonly Regex PortRegex = new(@"Port=(\d+)", RegexOptions.Compiled);
 
-    /// <summary>Returns the port iTees is configured to listen on, or null if not found.</summary>
+    /// <summary>Returns the port Infinite Tees is configured to listen on, or null if not found.</summary>
     public static int? GetInfiniteTeesPort()
     {
         if (!File.Exists(InfiniteTeesIniPath)) return null;
@@ -27,7 +27,7 @@ public static class SimConfig
         return match.Success && int.TryParse(match.Groups[1].Value, out var p) ? p : null;
     }
 
-    /// <summary>Rewrites iTees's listening port. Returns true if the file was changed.</summary>
+    /// <summary>Rewrites Infinite Tees's listening port. Returns true if the file was changed.</summary>
     public static bool SetInfiniteTeesPort(int newPort)
     {
         if (!File.Exists(InfiniteTeesIniPath)) return false;
@@ -76,7 +76,7 @@ public static class SimConfig
     /// <summary>
     /// Finds where folder-watcher-mode shots should be forwarded.
     /// Prefers an explicit direct-mode sim on 921; otherwise falls back to
-    /// iTees's configured port (999 by default) so the standard setup still works.
+    /// Infinite Tees's configured port (999 by default) so the standard setup still works.
     /// </summary>
     public static (SimTarget sim, int port) GetForwardTarget()
     {
@@ -86,11 +86,11 @@ public static class SimConfig
         if (GetDrillsPort() == 921) return (SimTarget.Drills, 921);
         if (GetInfiniteTeesPort() == 921) return (SimTarget.InfiniteTees, 921);
 
-        // Default: iTees on its standard 999 port.
+        // Default: Infinite Tees on its standard 999 port.
         var iteesPort = GetInfiniteTeesPort();
         if (iteesPort.HasValue) return (SimTarget.InfiniteTees, iteesPort.Value);
 
-        // No sim config readable — assume iTees default.
+        // No sim config readable — assume Infinite Tees default.
         return (SimTarget.InfiniteTees, 999);
     }
 }
