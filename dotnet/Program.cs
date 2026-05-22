@@ -1,30 +1,65 @@
+using System.Diagnostics;
+
 namespace VxProxy;
+
+[Flags]
+public enum SimTarget
+{
+    None = 0,
+    InfiniteTees = 1 << 0,
+    Drills = 1 << 1,
+}
 
 static class Program
 {
     [STAThread]
     static void Main(string[] args)
     {
+        KillOlderInstances();
+
         ApplicationConfiguration.Initialize();
 
-        bool directMode = args.Any(a =>
-            a.Equals("--direct", StringComparison.OrdinalIgnoreCase) ||
-            a.Equals("-d", StringComparison.OrdinalIgnoreCase))
-            || IsInfiniteTeesOnPort921();
+        bool folderWatcherMode = args.Any(a =>
+            a.Equals("--folder-watcher", StringComparison.OrdinalIgnoreCase) ||
+            a.Equals("-w", StringComparison.OrdinalIgnoreCase));
 
-        Application.Run(new TrayApplicationContext(directMode));
+        var detected = SimConfig.DetectDirectTarget();
+
+        Application.Run(new TrayApplicationContext(folderWatcherMode, detected));
     }
 
-    private static bool IsInfiniteTeesOnPort921()
+    /// <summary>
+    /// Kill any other VxProxy instances (running our exact same binary path).
+    /// Real GSPconnect.exe at the canonical GSPro install path is left alone —
+    /// we only target processes whose module path matches our own.
+    /// </summary>
+    private static void KillOlderInstances()
     {
-        var iniPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "InfiniteTees", "Saved", "Config", "Windows", "GameUserSettings.ini");
+        var currentPath = Environment.ProcessPath;
+        if (string.IsNullOrEmpty(currentPath)) return;
 
-        if (!File.Exists(iniPath))
-            return false;
+        var currentPid = Environment.ProcessId;
 
-        var content = File.ReadAllText(iniPath);
-        return content.Contains("Port=921");
+        foreach (var p in Process.GetProcessesByName("GSPconnect"))
+        {
+            if (p.Id == currentPid) continue;
+            try
+            {
+                if (string.Equals(p.MainModule?.FileName, currentPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    p.Kill(entireProcessTree: true);
+                    p.WaitForExit(2000);
+                }
+            }
+            catch
+            {
+                // Most likely Access Denied — that's expected for the real GSPconnect.exe
+                // (different binary, possibly different user/elevation). Skip it.
+            }
+            finally
+            {
+                p.Dispose();
+            }
+        }
     }
 }

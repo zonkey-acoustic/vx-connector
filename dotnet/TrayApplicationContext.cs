@@ -5,12 +5,14 @@ public class TrayApplicationContext : ApplicationContext
     private readonly NotifyIcon _tray;
     private readonly ProxyEngine _engine;
     private readonly MainForm _form;
+    private readonly SimTarget _detectedSim;
     private ConnectionStatus _currentStatus;
 
-    public TrayApplicationContext(bool directMode = false)
+    public TrayApplicationContext(bool folderWatcherMode = false, SimTarget detectedSim = SimTarget.None)
     {
-        _engine = new ProxyEngine { DirectMode = directMode };
-        _form = new MainForm(_engine);
+        _detectedSim = detectedSim;
+        _engine = new ProxyEngine { FolderWatcherMode = folderWatcherMode };
+        _form = new MainForm(_engine, detectedSim);
 
         _tray = new NotifyIcon
         {
@@ -24,28 +26,29 @@ public class TrayApplicationContext : ApplicationContext
 
         _engine.StatusChanged += OnStatusChanged;
         _engine.Start();
+
+        // Defensive: ensure the tray reflects the actual engine status, even if
+        // the StatusChanged event fired before we could subscribe (race).
+        ApplyStatus(_engine.Status, forceRefresh: true);
     }
 
-    private void OnStatusChanged(ConnectionStatus status)
+    private void OnStatusChanged(ConnectionStatus status) => ApplyStatus(status, forceRefresh: false);
+
+    private void ApplyStatus(ConnectionStatus status, bool forceRefresh)
     {
-        if (status == _currentStatus) return;
+        if (!forceRefresh && status == _currentStatus) return;
         _currentStatus = status;
 
         var (color, text) = status switch
         {
-            ConnectionStatus.Connected =>
-                (Color.FromArgb(76, 175, 80), "VX Proxy — All connected"),
-            ConnectionStatus.ProTeeOnly =>
-                (Color.FromArgb(255, 193, 7), "VX Proxy — Infinite Tees disconnected"),
-            ConnectionStatus.Listening =>
-                (Color.FromArgb(255, 152, 0), "VX Proxy — Waiting for ProTee Labs"),
             ConnectionStatus.Direct =>
-                (Color.FromArgb(33, 150, 243), "VX Proxy — Direct mode (passthrough)"),
+                (Color.FromArgb(33, 150, 243), DirectStatusText()),
+            ConnectionStatus.FolderWatcher =>
+                (Color.FromArgb(156, 39, 176), FolderWatcherStatusText()),
             _ =>
                 (Color.FromArgb(244, 67, 54), "VX Proxy — Stopped"),
         };
 
-        // Marshal to UI thread for tray updates
         if (_form.InvokeRequired)
             _form.BeginInvoke(() => UpdateTray(color, text));
         else
@@ -60,6 +63,27 @@ public class TrayApplicationContext : ApplicationContext
         oldIcon?.Dispose();
     }
 
+    private string DirectStatusText()
+    {
+        var label = FormatSims(_detectedSim) ?? "passthrough";
+        return $"VX Proxy — Direct mode ({label})";
+    }
+
+    internal static string? FormatSims(SimTarget sims)
+    {
+        if (sims == SimTarget.None) return null;
+        var parts = new List<string>();
+        if (sims.HasFlag(SimTarget.Drills)) parts.Add("Drills");
+        if (sims.HasFlag(SimTarget.InfiniteTees)) parts.Add("Infinite Tees");
+        return string.Join("/", parts);
+    }
+
+    private static string FolderWatcherStatusText()
+    {
+        var (sim, port) = SimConfig.GetForwardTarget();
+        return $"VX Proxy — Folder watcher → {sim} :{port}";
+    }
+
     /// <summary>
     /// Generate a 32x32 icon: dark circle background, colored inner circle, "VX" text.
     /// </summary>
@@ -70,15 +94,12 @@ public class TrayApplicationContext : ApplicationContext
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         g.Clear(Color.Transparent);
 
-        // Dark outer circle
         using var darkBrush = new SolidBrush(Color.FromArgb(40, 40, 40));
         g.FillEllipse(darkBrush, 1, 1, 30, 30);
 
-        // Colored inner circle
         using var fillBrush = new SolidBrush(fill);
         g.FillEllipse(fillBrush, 3, 3, 26, 26);
 
-        // "VX" text
         using var font = new Font("Arial", 10, FontStyle.Bold);
         var sf = new StringFormat
         {
@@ -96,20 +117,76 @@ public class TrayApplicationContext : ApplicationContext
         menu.Items.Add("Show Log", null, (_, _) => ShowForm());
         menu.Items.Add(new ToolStripSeparator());
 
-        var startItem = menu.Items.Add("Start Proxy", null, (_, _) => _engine.Start());
-        var stopItem = menu.Items.Add("Stop Proxy", null, (_, _) => _engine.Stop());
+        var toDirectItem = menu.Items.Add(
+            "Switch to Direct mode",
+            null,
+            (_, _) => SwitchEngineMode(folderWatcher: false));
+        var toFolderWatcherItem = menu.Items.Add(
+            "Switch to Folder Watcher mode",
+            null,
+            (_, _) => SwitchEngineMode(folderWatcher: true));
+
+        var iteesSeparator = new ToolStripSeparator();
+        menu.Items.Add(iteesSeparator);
+        var iteesToDirectItem = menu.Items.Add(
+            "Switch Infinite Tees to Direct mode (port 921)",
+            null,
+            (_, _) => SwitchInfiniteTeesToDirect());
 
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Quit", null, (_, _) => Quit());
 
-        // Show/hide start/stop based on engine state
         menu.Opening += (_, _) =>
         {
-            startItem.Visible = !_engine.IsRunning;
-            stopItem.Visible = _engine.IsRunning;
+            toDirectItem.Visible = _engine.FolderWatcherMode;
+            toFolderWatcherItem.Visible = !_engine.FolderWatcherMode;
+
+            var iteesPort = SimConfig.GetInfiniteTeesPort();
+            iteesToDirectItem.Visible = iteesPort == 999;
+            iteesSeparator.Visible = iteesPort == 999;
         };
 
         return menu;
+    }
+
+    private void SwitchEngineMode(bool folderWatcher)
+    {
+        _engine.RestartIn(folderWatcher);
+        ApplyStatus(_engine.Status, forceRefresh: true);
+    }
+
+    private void SwitchInfiniteTeesToDirect()
+    {
+        const int newPort = 921;
+        const int oldPort = 999;
+
+        var prompt = $"Change the Infinite Tees listening port from {oldPort} to {newPort}?\n\n" +
+                     "This puts iTees on the port ProTee Labs sends to, so Direct mode works without VX Proxy in the data path.\n" +
+                     "You'll need to restart Infinite Tees for the change to take effect.";
+
+        var result = MessageBox.Show(
+            prompt,
+            "Switch Infinite Tees to Direct mode",
+            MessageBoxButtons.OKCancel,
+            MessageBoxIcon.Question);
+
+        if (result != DialogResult.OK) return;
+
+        if (!SimConfig.SetInfiniteTeesPort(newPort))
+        {
+            MessageBox.Show(
+                $"Could not update {SimConfig.InfiniteTeesIniPath}.\nFile may be missing or read-only.",
+                "VX Proxy",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+            return;
+        }
+
+        MessageBox.Show(
+            $"Infinite Tees port set to {newPort}.\n\nRestart Infinite Tees so the new port takes effect.",
+            "VX Proxy",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
     }
 
     private void ShowForm()

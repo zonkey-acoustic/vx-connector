@@ -3,6 +3,7 @@ namespace VxProxy;
 public class MainForm : Form
 {
     private readonly ProxyEngine _engine;
+    private readonly SimTarget _detectedSim;
     private readonly RichTextBox _logBox;
     private readonly Label _statusDot;
     private readonly Label _statusLabel;
@@ -11,9 +12,10 @@ public class MainForm : Form
     private const int MaxLogLines = 500;
     private const int TrimBatchSize = 100;
 
-    public MainForm(ProxyEngine engine)
+    public MainForm(ProxyEngine engine, SimTarget detectedSim = SimTarget.None)
     {
         _engine = engine;
+        _detectedSim = detectedSim;
 
         Text = "VX Proxy";
         Icon = CreateGolfBallIcon();
@@ -188,19 +190,27 @@ public class MainForm : Form
     {
         (_statusDot.ForeColor, _statusLabel.Text) = status switch
         {
-            ConnectionStatus.Connected =>
-                (Color.FromArgb(76, 175, 80), "ProTee Labs: Connected | Infinite Tees: Connected"),
-            ConnectionStatus.ProTeeOnly =>
-                (Color.FromArgb(255, 193, 7), "ProTee Labs: Connected | Infinite Tees: Disconnected"),
-            ConnectionStatus.Listening =>
-                (Color.FromArgb(255, 152, 0), "Listening — waiting for ProTee Labs"),
             ConnectionStatus.Direct =>
-                (Color.FromArgb(33, 150, 243), "Direct mode — ProTee Labs talks straight to Infinite Tees"),
+                (Color.FromArgb(33, 150, 243), DirectStatusText()),
+            ConnectionStatus.FolderWatcher =>
+                (Color.FromArgb(156, 39, 176), FolderWatcherStatusText()),
             _ =>
                 (Color.FromArgb(244, 67, 54), "Stopped"),
         };
 
         _toggleBtn.Text = _engine.IsRunning ? "Stop" : "Start";
+    }
+
+    private string DirectStatusText()
+    {
+        var label = TrayApplicationContext.FormatSims(_detectedSim) ?? "the target sim";
+        return $"Direct mode — ProTee Labs talks straight to {label}";
+    }
+
+    private static string FolderWatcherStatusText()
+    {
+        var (sim, port) = SimConfig.GetForwardTarget();
+        return $"Folder watcher mode — shots forwarded to {sim} on port {port}";
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)

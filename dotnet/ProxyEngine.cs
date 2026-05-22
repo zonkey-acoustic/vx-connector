@@ -1,11 +1,12 @@
-using System.Net;
+using System.IO;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace VxProxy;
 
-public enum ConnectionStatus { Stopped, Listening, ProTeeOnly, Connected, Direct }
+public enum ConnectionStatus { Stopped, Direct, FolderWatcher }
 
 public record ShotInfo(
     int ShotNumber,
@@ -17,421 +18,286 @@ public record ShotInfo(
     bool HasClub
 );
 
+/// <summary>
+/// Runs in one of two modes:
+///   Direct        - process exists only to satisfy ProTee Labs's GSPconnect.exe
+///                   check. ProTee Labs talks straight to the target sim on :921.
+///   FolderWatcher - watches ProTee's shots folder, converts each shot to
+///                   OpenConnect JSON, forwards it to the target sim's port.
+/// </summary>
 public class ProxyEngine : IDisposable
 {
-    private const string ListenHost = "127.0.0.1";
-    private const int ListenPort = 921;
-    private const string InfiniteTeesHost = "127.0.0.1";
-    private const int InfiniteTeesPort = 999;
+    private const string ForwardHost = "127.0.0.1";
 
-    private TcpListener? _listener;
     private CancellationTokenSource? _cts;
-    private bool _proTeeConnected;
-    private bool _infiniteTeesConnected;
+    private ShotFolderWatcher? _folderWatcher;
+    private int _watcherShotNumber;
 
     public int ShotCount { get; private set; }
     public bool IsRunning { get; private set; }
 
-    /// <summary>
-    /// When true, Start() skips binding the listen port. The process still
-    /// runs so ProTee Labs's GSPconnect.exe pre-check passes, but Infinite
-    /// Tees is expected to be listening on <see cref="ListenPort"/> itself.
-    /// </summary>
-    public bool DirectMode { get; set; }
+    /// <summary>When true, Start() runs a folder watcher; otherwise runs Direct.</summary>
+    public bool FolderWatcherMode { get; set; }
 
-    /// <summary>Fired on every log line (already timestamped).</summary>
     public event Action<string>? Log;
-
-    /// <summary>Fired when connection status changes.</summary>
     public event Action<ConnectionStatus>? StatusChanged;
-
-    /// <summary>Fired when a shot with ball data is received.</summary>
     public event Action<ShotInfo>? ShotReceived;
 
     public ConnectionStatus Status =>
         !IsRunning ? ConnectionStatus.Stopped :
-        DirectMode ? ConnectionStatus.Direct :
-        _proTeeConnected && _infiniteTeesConnected ? ConnectionStatus.Connected :
-        _proTeeConnected ? ConnectionStatus.ProTeeOnly :
-        ConnectionStatus.Listening;
+        FolderWatcherMode ? ConnectionStatus.FolderWatcher :
+        ConnectionStatus.Direct;
 
     public bool Start()
     {
         if (IsRunning) return true;
 
-        if (DirectMode)
+        _cts = new CancellationTokenSource();
+
+        if (FolderWatcherMode)
         {
+            _folderWatcher = new ShotFolderWatcher(ShotFolderWatcher.DefaultShotsDirectory);
+            _folderWatcher.Log += Emit;
+            _folderWatcher.Error += Emit;
+            _folderWatcher.ShotDetected += dir => _ = HandleShotFolderAsync(dir, _cts.Token);
+
+            if (!_folderWatcher.Start())
+            {
+                _folderWatcher.Dispose();
+                _folderWatcher = null;
+                _cts.Dispose();
+                _cts = null;
+                return false;
+            }
+
             IsRunning = true;
-            Emit($"Direct mode — not binding port {ListenPort}.");
-            Emit($"ProTee Labs will connect straight to Infinite Tees on :{ListenPort}.");
+            var (sim, port) = SimConfig.GetForwardTarget();
+            Emit($"Folder watcher mode — forwarding shots to {sim} at {ForwardHost}:{port}.");
+            Emit("(Target re-resolved per shot, so toggling iTees direct mode mid-session is fine.)");
             OnStatusChanged();
             return true;
         }
 
-        try
-        {
-            _cts = new CancellationTokenSource();
-            _listener = new TcpListener(IPAddress.Parse(ListenHost), ListenPort);
-            _listener.Start(1);
-            IsRunning = true;
-
-            Emit($"Proxy listening on {ListenHost}:{ListenPort}");
-            Emit($"Forwarding to Infinite Tees at {InfiniteTeesHost}:{InfiniteTeesPort}");
-            Emit("Waiting for ProTee Labs to connect...");
-            OnStatusChanged();
-
-            _ = AcceptLoopAsync(_cts.Token);
-            return true;
-        }
-        catch (SocketException ex)
-        {
-            Emit($"Cannot bind to port {ListenPort}: {ex.Message}");
-            Emit("Is something else already listening on that port?");
-            return false;
-        }
+        // Direct mode — nothing to bind, nothing to watch. Just exist.
+        IsRunning = true;
+        var directTarget = SimConfig.DetectDirectTarget();
+        var label = directTarget == SimTarget.None ? "the target sim" : directTarget.ToString();
+        Emit($"Direct mode — VX Proxy is idle. ProTee Labs talks straight to {label} on :921.");
+        OnStatusChanged();
+        return true;
     }
 
     public void Stop()
     {
         if (!IsRunning) return;
-        Emit("Stopping proxy...");
+        Emit("Stopping...");
         _cts?.Cancel();
-        _listener?.Stop();
+        _folderWatcher?.Dispose();
+        _folderWatcher = null;
+        _cts?.Dispose();
+        _cts = null;
         IsRunning = false;
-        _proTeeConnected = false;
-        _infiniteTeesConnected = false;
         OnStatusChanged();
     }
 
-    private async Task AcceptLoopAsync(CancellationToken ct)
+    /// <summary>Switch modes while running. Stops the current mode and starts the new one.</summary>
+    public bool RestartIn(bool folderWatcherMode)
+    {
+        FolderWatcherMode = folderWatcherMode;
+        if (IsRunning) Stop();
+        return Start();
+    }
+
+    private async Task HandleShotFolderAsync(string shotDir, CancellationToken ct)
     {
         try
         {
-            while (!ct.IsCancellationRequested)
+            var json = await WaitForShotDataAsync(shotDir, ct);
+            if (json is null)
             {
-                var client = await _listener!.AcceptTcpClientAsync(ct);
-                _ = HandleClientAsync(client, ct);
+                Emit($"ShotData.json never appeared in {Path.GetFileName(shotDir)} — skipping.");
+                return;
             }
-        }
-        catch (OperationCanceledException) { }
-        catch (ObjectDisposedException) { }
-        finally
-        {
-            IsRunning = false;
-            OnStatusChanged();
-        }
-    }
 
-    private async Task HandleClientAsync(TcpClient proTee, CancellationToken ct)
-    {
-        var ep = proTee.Client.RemoteEndPoint as IPEndPoint;
-        Emit($"ProTee Labs connected from {ep?.Address}:{ep?.Port}");
-        _proTeeConnected = true;
-        OnStatusChanged();
-
-        // Try Infinite Tees once up front, but don't block on retries — the read
-        // loop below handles per-message reconnects and falls back to auto-generated
-        // responses when Infinite Tees is unavailable. Blocking here would leave
-        // ProTee Labs without any responses to its messages.
-        TcpClient? infiniteTees = await ConnectToInfiniteTeesAsync();
-
-        var buffer = new StringBuilder();
-
-        try
-        {
-            var stream = proTee.GetStream();
-            var readBuf = new byte[4096];
-
-            while (!ct.IsCancellationRequested)
+            using (json)
             {
-                int read;
+                int shotNum = ++_watcherShotNumber;
+                var openConnect = BuildOpenConnectMessage(json.RootElement, shotNum);
+                var bytes = Encoding.UTF8.GetBytes(openConnect + "\n");
+
+                LogShotFromFolder(json.RootElement, shotNum);
+
+                var (sim, port) = SimConfig.GetForwardTarget();
+
+                using var client = new TcpClient();
+                using var connectTimeout = new CancellationTokenSource(5000);
+                using var connectLinked = CancellationTokenSource.CreateLinkedTokenSource(ct, connectTimeout.Token);
                 try
                 {
-                    using var timeout = new CancellationTokenSource(2000);
-                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
-                    read = await stream.ReadAsync(readBuf.AsMemory(), linked.Token);
+                    await client.ConnectAsync(ForwardHost, port, connectLinked.Token);
                 }
-                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                catch (Exception ex)
                 {
-                    continue; // read timeout — keep looping
+                    Emit($"Cannot reach {sim} on port {port}: {ex.Message}");
+                    return;
                 }
 
-                if (read == 0)
+                var stream = client.GetStream();
+                await stream.WriteAsync(bytes, ct);
+
+                var buf = new byte[4096];
+                using var readTimeout = new CancellationTokenSource(2000);
+                using var readLinked = CancellationTokenSource.CreateLinkedTokenSource(ct, readTimeout.Token);
+                try
                 {
-                    Emit("ProTee Labs disconnected.");
-                    break;
+                    int read = await stream.ReadAsync(buf.AsMemory(), readLinked.Token);
+                    if (read > 0) LogServerResponse(buf[..read]);
                 }
-
-                buffer.Append(Encoding.UTF8.GetString(readBuf, 0, read));
-
-                // Extract complete JSON objects from the buffer
-                while (TryExtractJson(buffer, out var json))
-                {
-                    using var doc = JsonDocument.Parse(json);
-                    var root = doc.RootElement;
-
-                    var opts = root.TryGetProperty("ShotDataOptions", out var o) ? o : default;
-                    bool hasBall = GetBool(opts, "ContainsBallData");
-                    bool hasClub = GetBool(opts, "ContainsClubData");
-                    bool isHb = GetBool(opts, "IsHeartBeat");
-                    bool ready = GetBool(opts, "LaunchMonitorIsReady");
-                    bool detected = GetBool(opts, "LaunchMonitorBallDetected");
-                    int shotNum = root.TryGetProperty("ShotNumber", out var sn)
-                        ? sn.GetInt32() : 0;
-
-                    // Log shot info
-                    LogShotMessage(root, hasBall, hasClub, isHb, ready, detected, shotNum);
-
-                    // Forward to Infinite Tees
-                    var forward = Encoding.UTF8.GetBytes(json + "\n");
-
-                    if (!_infiniteTeesConnected)
-                    {
-                        infiniteTees?.Dispose();
-                        infiniteTees = await ConnectToInfiniteTeesAsync();
-                    }
-
-                    byte[]? infiniteTeesResponse = null;
-                    if (_infiniteTeesConnected && infiniteTees != null)
-                    {
-                        infiniteTeesResponse = await ForwardToInfiniteTeesAsync(infiniteTees, forward);
-                        if (infiniteTeesResponse == null && (hasBall || hasClub))
-                        {
-                            Emit("Reconnecting to infiniteTees...");
-                            infiniteTees.Dispose();
-                            infiniteTees = await ConnectToInfiniteTeesAsync();
-                            if (_infiniteTeesConnected && infiniteTees != null)
-                                infiniteTeesResponse = await ForwardToInfiniteTeesAsync(infiniteTees, forward);
-                        }
-                    }
-
-                    // Respond to ProTee Labs
-                    byte[] response;
-                    if (infiniteTeesResponse != null)
-                    {
-                        LogInfiniteTeesResponse(infiniteTeesResponse);
-                        response = infiniteTeesResponse;
-                    }
-                    else
-                    {
-                        var msg = (hasBall, hasClub) switch
-                        {
-                            (true, true) => "Club & Ball Data received",
-                            (true, false) => "Ball Data received",
-                            (false, true) => "Club Data received",
-                            _ => "Shot received successfully"
-                        };
-                        response = MakeResponse(200, msg);
-                    }
-
-                    await stream.WriteAsync(response, ct);
-                }
+                catch (OperationCanceledException) { /* no response — that's ok */ }
             }
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            Emit("ProTee Labs connection reset.");
-        }
-        catch (SocketException)
-        {
-            Emit("ProTee Labs connection reset.");
-        }
-        catch (Exception ex)
-        {
-            Emit($"Error: {ex.Message}");
-        }
-        finally
-        {
-            proTee.Dispose();
-            infiniteTees?.Dispose();
-            _proTeeConnected = false;
-            _infiniteTeesConnected = false;
-            OnStatusChanged();
-            Emit("Session ended.");
-        }
-    }
-
-    private async Task<TcpClient?> ConnectToInfiniteTeesAsync()
-    {
-        try
-        {
-            var client = new TcpClient();
-            using var timeout = new CancellationTokenSource(5000);
-            await client.ConnectAsync(InfiniteTeesHost, InfiniteTeesPort, timeout.Token);
-            Emit($"Connected to Infinite Tees at {InfiniteTeesHost}:{InfiniteTeesPort}");
-            _infiniteTeesConnected = true;
-            OnStatusChanged();
-            return client;
-        }
-        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused)
-        {
-            Emit($"Cannot connect to Infinite Tees on port {InfiniteTeesPort} — will retry");
-            _infiniteTeesConnected = false;
-            OnStatusChanged();
-            return null;
-        }
-        catch (Exception ex)
-        {
-            Emit($"Infinite Tees connection error: {ex.Message}");
-            _infiniteTeesConnected = false;
-            OnStatusChanged();
-            return null;
-        }
-    }
-
-    private async Task<byte[]?> ForwardToInfiniteTeesAsync(TcpClient infiniteTees, byte[] data)
-    {
-        try
-        {
-            var stream = infiniteTees.GetStream();
-            await stream.WriteAsync(data);
-
-            using var timeout = new CancellationTokenSource(2000);
-            var buf = new byte[4096];
-            try
-            {
-                int read = await stream.ReadAsync(buf.AsMemory(), timeout.Token);
-                return read > 0 ? buf[..read] : null;
-            }
-            catch (OperationCanceledException)
-            {
-                return null;
-            }
-        }
-        catch (Exception ex)
-        {
-            Emit($"Infinite Tees connection lost: {ex.Message}");
-            _infiniteTeesConnected = false;
-            OnStatusChanged();
-            return null;
+            Emit($"Folder shot handler error: {ex.Message}");
         }
     }
 
     /// <summary>
-    /// Extract the first complete JSON object from the buffer using brace-depth counting.
-    /// Handles cases where multiple messages arrive in one read, or a message spans reads.
+    /// Polls for ShotData.json in the new shot directory. The directory event
+    /// fires before ProTee Labs finishes writing the file, so we retry on
+    /// IOException / JsonException until parseable or the deadline lapses.
     /// </summary>
-    private static bool TryExtractJson(StringBuilder buffer, out string json)
+    private static async Task<JsonDocument?> WaitForShotDataAsync(string shotDir, CancellationToken ct)
     {
-        json = "";
-        var s = buffer.ToString().TrimStart();
-        if (s.Length == 0 || s[0] != '{')
+        var path = Path.Combine(shotDir, "ShotData.json");
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < deadline && !ct.IsCancellationRequested)
         {
-            buffer.Clear();
-            return false;
+            if (File.Exists(path))
+            {
+                try
+                {
+                    var bytes = await File.ReadAllBytesAsync(path, ct);
+                    return JsonDocument.Parse(bytes);
+                }
+                catch (JsonException) { /* still being written — retry */ }
+                catch (IOException) { /* file locked — retry */ }
+            }
+            await Task.Delay(100, ct);
         }
-
-        int depth = 0;
-        bool inString = false;
-        bool escaped = false;
-
-        for (int i = 0; i < s.Length; i++)
-        {
-            char ch = s[i];
-
-            if (escaped)
-            {
-                escaped = false;
-                continue;
-            }
-
-            if (ch == '\\' && inString)
-            {
-                escaped = true;
-                continue;
-            }
-
-            if (ch == '"')
-            {
-                inString = !inString;
-                continue;
-            }
-
-            if (inString) continue;
-
-            if (ch == '{') depth++;
-            else if (ch == '}') depth--;
-
-            if (depth == 0)
-            {
-                json = s[..(i + 1)];
-                buffer.Clear();
-                buffer.Append(s[(i + 1)..]);
-                return true;
-            }
-        }
-
-        return false; // incomplete — wait for more data
+        return null;
     }
 
-    private static byte[] MakeResponse(int code, string message) =>
-        Encoding.UTF8.GetBytes(
-            JsonSerializer.Serialize(new { Code = code, Message = message }) + "\n");
-
-    private static bool GetBool(JsonElement el, string prop) =>
-        el.ValueKind == JsonValueKind.Object
-        && el.TryGetProperty(prop, out var v)
-        && v.ValueKind == JsonValueKind.True;
-
-    private void LogShotMessage(JsonElement root, bool hasBall, bool hasClub,
-        bool isHb, bool ready, bool detected, int shotNum)
+    /// <summary>
+    /// Convert a ShotData.json document (with stringly-typed values like "147.5 mph")
+    /// into a single-shot OpenConnect JSON message with raw numeric fields.
+    /// Includes every numeric field ShotData.json carries; receivers should ignore
+    /// fields they don't recognize.
+    /// </summary>
+    private static string BuildOpenConnectMessage(JsonElement shotData, int shotNumber)
     {
-        if (hasBall)
-        {
-            var ball = root.GetProperty("BallData");
-            var speed = ball.GetProperty("Speed").GetDouble();
-            var spin = ball.GetProperty("TotalSpin").GetDouble();
-            var vla = ball.GetProperty("VLA").GetDouble();
+        var ball = shotData.TryGetProperty("BallData", out var b) ? b : default;
+        var club = shotData.TryGetProperty("ClubData", out var c) ? c : default;
+        var flight = shotData.TryGetProperty("FlightData", out var f) ? f : default;
+        var smash = ParseNumeric(shotData, "SmashFactor");
+        var clubName = ReadString(club, "ClubName");
 
-            if (hasClub)
+        var payload = new
+        {
+            DeviceID = "ProTee Labs",
+            Units = "Yards",
+            ShotNumber = shotNumber,
+            APIversion = "1",
+            ClubIndex = 0,
+            BallData = new
             {
-                var club = root.GetProperty("ClubData");
-                var clubSpeed = club.GetProperty("Speed").GetDouble();
-                Emit($"SHOT #{shotNum} [Ball+Club] Speed={speed:F1} Spin={spin:F0} " +
-                     $"VLA={vla:F1} ClubSpeed={clubSpeed:F1}");
-                ShotCount++;
-                ShotReceived?.Invoke(new ShotInfo(shotNum, speed, spin, vla, clubSpeed, true, true));
-            }
-            else
+                Speed = ParseNumeric(ball, "Speed"),
+                SpinAxis = ParseNumeric(ball, "SpinAxis"),
+                TotalSpin = ParseNumeric(ball, "TotalSpin"),
+                BackSpin = ParseNumeric(ball, "BackSpin"),
+                SideSpin = ParseNumeric(ball, "SideSpin"),
+                RifleSpin = ParseNumeric(ball, "RifleSpin"),
+                HLA = ParseNumeric(ball, "LaunchDirection"),
+                VLA = ParseNumeric(ball, "LaunchAngle"),
+                CarryDistance = ParseNumeric(flight, "Carry"),
+                SmashFactor = smash,
+            },
+            ClubData = new
             {
-                Emit($"SHOT #{shotNum} [Ball] Speed={speed:F1} Spin={spin:F0} VLA={vla:F1}");
-                ShotCount++;
-                ShotReceived?.Invoke(new ShotInfo(shotNum, speed, spin, vla, 0, true, false));
-            }
-        }
-        else if (hasClub)
-        {
-            var club = root.GetProperty("ClubData");
-            Emit($"SHOT #{shotNum} [Club] ClubSpeed={club.GetProperty("Speed").GetDouble():F1} " +
-                 $"AoA={club.GetProperty("AngleOfAttack").GetDouble():F1} " +
-                 $"Path={club.GetProperty("Path").GetDouble():F1}");
-        }
-        else if (isHb)
-        {
-            // suppress heartbeat spam
-        }
-        else if (ready && detected)
-        {
-            Emit($"Status #{shotNum}: Ready, ball detected");
-        }
-        else if (ready)
-        {
-            Emit($"Status #{shotNum}: Ready");
-        }
-        else
-        {
-            Emit($"Status #{shotNum}: Not ready");
-        }
+                Speed = ParseNumeric(club, "Speed"),
+                SpeedAtImpact = ParseNumeric(club, "Speed"),
+                AngleOfAttack = ParseNumeric(club, "AttackAngle"),
+                FaceToTarget = ParseNumeric(club, "FaceAngle"),
+                FaceToPath = ParseNumeric(club, "FaceToPath"),
+                Lie = ParseNumeric(club, "Lie"),
+                Loft = ParseNumeric(club, "Loft"),
+                SpinLoft = ParseNumeric(club, "SpinLoft"),
+                Path = ParseNumeric(club, "SwingPath"),
+                HorizontalFaceImpact = ParseNumeric(club, "ImpactPointX"),
+                VerticalFaceImpact = ParseNumeric(club, "ImpactPointY"),
+                ImpactRatioX = ParseNumeric(club, "ImpactRatioX"),
+                ImpactRatioY = ParseNumeric(club, "ImpactRatioY"),
+                ClosureRate = ParseNumeric(club, "ClosureRate"),
+                ClubName = clubName,
+            },
+            ShotDataOptions = new
+            {
+                ContainsBallData = true,
+                ContainsClubData = true,
+                LaunchMonitorIsReady = false,
+                LaunchMonitorBallDetected = false,
+                IsHeartBeat = false,
+            },
+        };
+
+        return JsonSerializer.Serialize(payload);
     }
 
-    private void LogInfiniteTeesResponse(byte[] data)
+    private static string? ReadString(JsonElement parent, string property)
+    {
+        if (parent.ValueKind != JsonValueKind.Object) return null;
+        if (!parent.TryGetProperty(property, out var v)) return null;
+        return v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+    }
+
+    private static readonly Regex LeadingNumber = new(@"-?\d+(\.\d+)?", RegexOptions.Compiled);
+
+    private static double ParseNumeric(JsonElement parent, string property)
+    {
+        if (parent.ValueKind != JsonValueKind.Object) return 0;
+        if (!parent.TryGetProperty(property, out var v)) return 0;
+        if (v.ValueKind == JsonValueKind.Number) return v.GetDouble();
+        if (v.ValueKind != JsonValueKind.String) return 0;
+
+        var s = v.GetString();
+        if (string.IsNullOrEmpty(s)) return 0;
+        var m = LeadingNumber.Match(s);
+        return m.Success && double.TryParse(m.Value, System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : 0;
+    }
+
+    private void LogShotFromFolder(JsonElement shotData, int shotNum)
+    {
+        var ball = shotData.TryGetProperty("BallData", out var b) ? b : default;
+        var club = shotData.TryGetProperty("ClubData", out var c) ? c : default;
+
+        var ballSpeed = ParseNumeric(ball, "Speed");
+        var spin = ParseNumeric(ball, "TotalSpin");
+        var vla = ParseNumeric(ball, "LaunchAngle");
+        var clubSpeed = ParseNumeric(club, "Speed");
+
+        Emit($"SHOT #{shotNum} [Folder] Speed={ballSpeed:F1} Spin={spin:F0} VLA={vla:F1} ClubSpeed={clubSpeed:F1}");
+        ShotCount++;
+        ShotReceived?.Invoke(new ShotInfo(shotNum, ballSpeed, spin, vla, clubSpeed, true, true));
+    }
+
+    private void LogServerResponse(byte[] data)
     {
         try
         {
             using var doc = JsonDocument.Parse(data);
             var msg = doc.RootElement.TryGetProperty("Message", out var m)
                 ? m.GetString() : null;
-            Emit($"  Infinite Tees: {msg ?? Encoding.UTF8.GetString(data).Trim()}");
+            Emit($"  Server: {msg ?? Encoding.UTF8.GetString(data).Trim()}");
         }
         catch
         {
