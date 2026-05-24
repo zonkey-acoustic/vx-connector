@@ -207,9 +207,9 @@ public class MainForm : Form
         return $"Direct mode — ProTee Labs talks straight to {label}";
     }
 
-    private static string FolderWatcherStatusText()
+    private string FolderWatcherStatusText()
     {
-        var (sim, port) = SimConfig.GetForwardTarget();
+        var (sim, port) = _engine.ResolveForwardTarget();
         return $"Folder watcher mode — shots forwarded to {sim} on port {port}";
     }
 

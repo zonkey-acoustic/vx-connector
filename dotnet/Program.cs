@@ -19,13 +19,35 @@ static class Program
 
         ApplicationConfiguration.Initialize();
 
-        bool folderWatcherMode = args.Any(a =>
-            a.Equals("--folder-watcher", StringComparison.OrdinalIgnoreCase) ||
-            a.Equals("-w", StringComparison.OrdinalIgnoreCase));
-
+        var startupMode = ParseStartupMode(args);
         var detected = SimConfig.DetectDirectTarget();
 
-        Application.Run(new TrayApplicationContext(folderWatcherMode, detected));
+        Application.Run(new TrayApplicationContext(startupMode, detected));
+    }
+
+    /// <summary>
+    /// CLI:
+    ///   (none)                          → Folder Watcher → Infinite Tees (default)
+    ///   --direct                        → Direct
+    ///   --watch-drills                  → Folder Watcher → Drills
+    ///   --watch-itees / --watch-infinite-tees → Folder Watcher → Infinite Tees
+    ///   --folder-watcher / -w           → alias for --watch-itees (back-compat)
+    /// </summary>
+    private static EngineMode ParseStartupMode(string[] args)
+    {
+        foreach (var arg in args)
+        {
+            if (arg.Equals("--direct", StringComparison.OrdinalIgnoreCase))
+                return EngineMode.Direct;
+            if (arg.Equals("--watch-drills", StringComparison.OrdinalIgnoreCase))
+                return EngineMode.FolderWatcherDrills;
+            if (arg.Equals("--watch-itees", StringComparison.OrdinalIgnoreCase) ||
+                arg.Equals("--watch-infinite-tees", StringComparison.OrdinalIgnoreCase) ||
+                arg.Equals("--folder-watcher", StringComparison.OrdinalIgnoreCase) ||
+                arg.Equals("-w", StringComparison.OrdinalIgnoreCase))
+                return EngineMode.FolderWatcherInfiniteTees;
+        }
+        return EngineMode.FolderWatcherInfiniteTees;
     }
 
     /// <summary>

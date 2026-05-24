@@ -8,6 +8,8 @@ namespace VxProxy;
 
 public enum ConnectionStatus { Stopped, Direct, FolderWatcher }
 
+public enum EngineMode { Direct, FolderWatcherDrills, FolderWatcherInfiniteTees }
+
 public record ShotInfo(
     int ShotNumber,
     double BallSpeed,
@@ -33,11 +35,22 @@ public class ProxyEngine : IDisposable
     private ShotFolderWatcher? _folderWatcher;
     private int _watcherShotNumber;
 
+    // Persistent TCP connection to the sim (Folder Watcher mode). Held for the
+    // lifetime of a session so the sim's UI sees us as continuously connected,
+    // matching the OpenConnect spec's "constant 2-way communication" intent.
+    private TcpClient? _persistentClient;
+    private NetworkStream? _persistentStream;
+    private Task? _readerTask;
+    private readonly SemaphoreSlim _writeLock = new(1, 1);
+    private readonly SemaphoreSlim _connectLock = new(1, 1);
+
     public int ShotCount { get; private set; }
     public bool IsRunning { get; private set; }
 
-    /// <summary>When true, Start() runs a folder watcher; otherwise runs Direct.</summary>
-    public bool FolderWatcherMode { get; set; }
+    /// <summary>Which mode Start() runs. Default Folder Watcher → Infinite Tees.</summary>
+    public EngineMode Mode { get; set; } = EngineMode.FolderWatcherInfiniteTees;
+
+    public bool FolderWatcherMode => Mode != EngineMode.Direct;
 
     public event Action<string>? Log;
     public event Action<ConnectionStatus>? StatusChanged;
@@ -45,8 +58,8 @@ public class ProxyEngine : IDisposable
 
     public ConnectionStatus Status =>
         !IsRunning ? ConnectionStatus.Stopped :
-        FolderWatcherMode ? ConnectionStatus.FolderWatcher :
-        ConnectionStatus.Direct;
+        Mode == EngineMode.Direct ? ConnectionStatus.Direct :
+        ConnectionStatus.FolderWatcher;
 
     public bool Start()
     {
@@ -54,7 +67,7 @@ public class ProxyEngine : IDisposable
 
         _cts = new CancellationTokenSource();
 
-        if (FolderWatcherMode)
+        if (Mode != EngineMode.Direct)
         {
             _folderWatcher = new ShotFolderWatcher(ShotFolderWatcher.DefaultShotsDirectory);
             _folderWatcher.Log += Emit;
@@ -71,10 +84,13 @@ public class ProxyEngine : IDisposable
             }
 
             IsRunning = true;
-            var (sim, port) = SimConfig.GetForwardTarget();
+            var (sim, port) = ResolveForwardTarget();
             Emit($"Folder watcher mode — forwarding shots to {sim} at {ForwardHost}:{port}.");
-            Emit("(Target re-resolved per shot, so toggling Infinite Tees direct mode mid-session is fine.)");
             OnStatusChanged();
+
+            // Best-effort initial connect so the sim sees us as connected from
+            // the moment we enter Folder Watcher mode, not just on first shot.
+            _ = TryConnectAsync(_cts.Token);
             return true;
         }
 
@@ -87,6 +103,21 @@ public class ProxyEngine : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// Resolve the forward target from the current Mode. The port is re-read
+    /// from sim config each call so a user changing the sim's port mid-session
+    /// is picked up on the next shot.
+    /// </summary>
+    public (SimTarget sim, int port) ResolveForwardTarget() => Mode switch
+    {
+        EngineMode.FolderWatcherDrills =>
+            (SimTarget.Drills, SimConfig.GetDrillsPort() ?? 921),
+        EngineMode.FolderWatcherInfiniteTees =>
+            (SimTarget.InfiniteTees, SimConfig.GetInfiniteTeesPort() ?? 999),
+        _ => throw new InvalidOperationException(
+            "ResolveForwardTarget is only valid in a folder-watcher mode."),
+    };
+
     public void Stop()
     {
         if (!IsRunning) return;
@@ -94,6 +125,9 @@ public class ProxyEngine : IDisposable
         _cts?.Cancel();
         _folderWatcher?.Dispose();
         _folderWatcher = null;
+        // Disposing the connection forces any in-flight ReadAsync to unblock
+        // (cancellation doesn't propagate cleanly through socket reads on Windows).
+        DisposeConnection();
         _cts?.Dispose();
         _cts = null;
         IsRunning = false;
@@ -101,9 +135,9 @@ public class ProxyEngine : IDisposable
     }
 
     /// <summary>Switch modes while running. Stops the current mode and starts the new one.</summary>
-    public bool RestartIn(bool folderWatcherMode)
+    public bool RestartIn(EngineMode mode)
     {
-        FolderWatcherMode = folderWatcherMode;
+        Mode = mode;
         if (IsRunning) Stop();
         return Start();
     }
@@ -127,39 +161,179 @@ public class ProxyEngine : IDisposable
 
                 LogShotFromFolder(json.RootElement, shotNum);
 
-                var (sim, port) = SimConfig.GetForwardTarget();
-
-                using var client = new TcpClient();
-                using var connectTimeout = new CancellationTokenSource(5000);
-                using var connectLinked = CancellationTokenSource.CreateLinkedTokenSource(ct, connectTimeout.Token);
-                try
+                // Try once on the existing persistent connection. On failure,
+                // reconnect once and try again. After that, drop the shot.
+                for (int attempt = 1; attempt <= 2; attempt++)
                 {
-                    await client.ConnectAsync(ForwardHost, port, connectLinked.Token);
-                }
-                catch (Exception ex)
-                {
-                    Emit($"Cannot reach {sim} on port {port}: {ex.Message}");
-                    return;
-                }
+                    if (!await EnsureConnectedAsync(ct))
+                    {
+                        if (attempt == 2) Emit("  Shot dropped: no connection to sim.");
+                        continue;
+                    }
 
-                var stream = client.GetStream();
-                await stream.WriteAsync(bytes, ct);
+                    if (await TryWriteAsync(bytes, ct)) return;
 
-                var buf = new byte[4096];
-                using var readTimeout = new CancellationTokenSource(2000);
-                using var readLinked = CancellationTokenSource.CreateLinkedTokenSource(ct, readTimeout.Token);
-                try
-                {
-                    int read = await stream.ReadAsync(buf.AsMemory(), readLinked.Token);
-                    if (read > 0) LogServerResponse(buf[..read]);
+                    if (attempt == 1) Emit("  Reconnecting and retrying...");
                 }
-                catch (OperationCanceledException) { /* no response — that's ok */ }
+                Emit("  Shot dropped: could not send after reconnect.");
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Emit($"Folder shot handler error: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Ensure we have an open persistent connection to the sim. If the existing
+    /// one is gone (or never established), connect now. Returns false on failure
+    /// so callers can decide whether to retry or drop the shot.
+    /// </summary>
+    private async Task<bool> EnsureConnectedAsync(CancellationToken ct)
+    {
+        if (_persistentClient?.Connected == true && _persistentStream is not null) return true;
+        return await TryConnectAsync(ct);
+    }
+
+    private async Task<bool> TryConnectAsync(CancellationToken ct)
+    {
+        await _connectLock.WaitAsync(ct);
+        try
+        {
+            if (_persistentClient?.Connected == true && _persistentStream is not null) return true;
+
+            DisposeConnection();
+
+            var (sim, port) = ResolveForwardTarget();
+            var client = new TcpClient();
+            using var connectTimeout = new CancellationTokenSource(5000);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, connectTimeout.Token);
+            try
+            {
+                await client.ConnectAsync(ForwardHost, port, linked.Token);
+            }
+            catch (SocketException sex)
+            {
+                Emit($"Cannot reach {sim} on port {port}: {sex.SocketErrorCode} ({sex.Message})");
+                client.Dispose();
+                return false;
+            }
+            catch (OperationCanceledException) when (connectTimeout.IsCancellationRequested)
+            {
+                Emit($"Cannot reach {sim} on port {port}: connect timed out after 5s");
+                client.Dispose();
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Emit($"Cannot reach {sim} on port {port}: {ex.Message}");
+                client.Dispose();
+                return false;
+            }
+
+            _persistentClient = client;
+            _persistentStream = client.GetStream();
+            Emit($"Connected to {sim} on :{port} (persistent).");
+
+            // Background reader; captured stream so it survives field swaps.
+            var streamRef = _persistentStream;
+            _readerTask = Task.Run(() => ReadResponsesAsync(streamRef, ct), ct);
+            return true;
+        }
+        finally
+        {
+            _connectLock.Release();
+        }
+    }
+
+    private async Task<bool> TryWriteAsync(byte[] bytes, CancellationToken ct)
+    {
+        await _writeLock.WaitAsync(ct);
+        try
+        {
+            var stream = _persistentStream;
+            if (stream is null) return false;
+            try
+            {
+                await stream.WriteAsync(bytes, ct);
+                return true;
+            }
+            catch (IOException ex)
+            {
+                var inner = ex.InnerException as SocketException;
+                Emit(inner is not null
+                    ? $"  Write failed: {inner.SocketErrorCode} ({inner.Message})"
+                    : $"  Write failed: {ex.Message}");
+                DisposeConnection();
+                return false;
+            }
+            catch (ObjectDisposedException)
+            {
+                // Stream was torn down by reader or Stop(); just signal caller to retry.
+                return false;
+            }
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    private async Task ReadResponsesAsync(NetworkStream stream, CancellationToken ct)
+    {
+        var buf = new byte[4096];
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                int read;
+                try
+                {
+                    read = await stream.ReadAsync(buf.AsMemory(), ct);
+                }
+                catch (OperationCanceledException) { return; }
+                catch (ObjectDisposedException) { return; }
+                catch (IOException ex)
+                {
+                    var inner = ex.InnerException as SocketException;
+                    Emit(inner is not null
+                        ? $"  Server connection error: {inner.SocketErrorCode} ({inner.Message})"
+                        : $"  Server connection error: {ex.Message}");
+                    InvalidateIfCurrent(stream);
+                    return;
+                }
+
+                if (read == 0)
+                {
+                    Emit("  Server closed the connection (FIN).");
+                    InvalidateIfCurrent(stream);
+                    return;
+                }
+
+                LogServerResponse(buf[..read]);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Emit($"  Reader error: {ex.Message}");
+            InvalidateIfCurrent(stream);
+        }
+    }
+
+    /// <summary>Tear down the persistent connection if it's still the one this reader was reading.</summary>
+    private void InvalidateIfCurrent(NetworkStream stream)
+    {
+        if (ReferenceEquals(_persistentStream, stream)) DisposeConnection();
+    }
+
+    private void DisposeConnection()
+    {
+        var stream = _persistentStream;
+        var client = _persistentClient;
+        _persistentStream = null;
+        _persistentClient = null;
+        try { stream?.Dispose(); } catch { }
+        try { client?.Dispose(); } catch { }
     }
 
     /// <summary>
@@ -292,16 +466,23 @@ public class ProxyEngine : IDisposable
 
     private void LogServerResponse(byte[] data)
     {
-        try
+        var text = Encoding.UTF8.GetString(data);
+        var lines = text.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var line in lines)
         {
-            using var doc = JsonDocument.Parse(data);
-            var msg = doc.RootElement.TryGetProperty("Message", out var m)
-                ? m.GetString() : null;
-            Emit($"  Server: {msg ?? Encoding.UTF8.GetString(data).Trim()}");
-        }
-        catch
-        {
-            // non-JSON response — ignore
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                var msg = doc.RootElement.TryGetProperty("Message", out var m) ? m.GetString() : null;
+                var code = doc.RootElement.TryGetProperty("Code", out var c) && c.ValueKind == JsonValueKind.Number
+                    ? c.GetInt32().ToString()
+                    : "?";
+                Emit($"  Server: [{code}] {msg ?? line}");
+            }
+            catch
+            {
+                Emit($"  Server (raw): {line}");
+            }
         }
     }
 

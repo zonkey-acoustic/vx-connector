@@ -8,10 +8,10 @@ public class TrayApplicationContext : ApplicationContext
     private readonly SimTarget _detectedSim;
     private ConnectionStatus _currentStatus;
 
-    public TrayApplicationContext(bool folderWatcherMode = false, SimTarget detectedSim = SimTarget.None)
+    public TrayApplicationContext(EngineMode startupMode = EngineMode.FolderWatcherInfiniteTees, SimTarget detectedSim = SimTarget.None)
     {
         _detectedSim = detectedSim;
-        _engine = new ProxyEngine { FolderWatcherMode = folderWatcherMode };
+        _engine = new ProxyEngine { Mode = startupMode };
         _form = new MainForm(_engine, detectedSim);
 
         _tray = new NotifyIcon
@@ -78,9 +78,9 @@ public class TrayApplicationContext : ApplicationContext
         return string.Join("/", parts);
     }
 
-    private static string FolderWatcherStatusText()
+    private string FolderWatcherStatusText()
     {
-        var (sim, port) = SimConfig.GetForwardTarget();
+        var (sim, port) = _engine.ResolveForwardTarget();
         return $"VX Proxy — Folder watcher → {sim} :{port}";
     }
 
@@ -120,11 +120,15 @@ public class TrayApplicationContext : ApplicationContext
         var toDirectItem = menu.Items.Add(
             "Switch to Direct mode",
             null,
-            (_, _) => SwitchEngineMode(folderWatcher: false));
-        var toFolderWatcherItem = menu.Items.Add(
-            "Switch to Folder Watcher mode",
+            (_, _) => SwitchEngineMode(EngineMode.Direct));
+        var toFolderWatcherDrillsItem = menu.Items.Add(
+            "Switch to Folder Watcher → Drills",
             null,
-            (_, _) => SwitchEngineMode(folderWatcher: true));
+            (_, _) => SwitchEngineMode(EngineMode.FolderWatcherDrills));
+        var toFolderWatcherIteesItem = menu.Items.Add(
+            "Switch to Folder Watcher → Infinite Tees",
+            null,
+            (_, _) => SwitchEngineMode(EngineMode.FolderWatcherInfiniteTees));
 
         var iteesSeparator = new ToolStripSeparator();
         menu.Items.Add(iteesSeparator);
@@ -138,8 +142,9 @@ public class TrayApplicationContext : ApplicationContext
 
         menu.Opening += (_, _) =>
         {
-            toDirectItem.Visible = _engine.FolderWatcherMode;
-            toFolderWatcherItem.Visible = !_engine.FolderWatcherMode;
+            toDirectItem.Visible = _engine.Mode != EngineMode.Direct;
+            toFolderWatcherDrillsItem.Visible = _engine.Mode != EngineMode.FolderWatcherDrills;
+            toFolderWatcherIteesItem.Visible = _engine.Mode != EngineMode.FolderWatcherInfiniteTees;
 
             var iteesPort = SimConfig.GetInfiniteTeesPort();
             iteesToDirectItem.Visible = iteesPort == 999;
@@ -149,9 +154,9 @@ public class TrayApplicationContext : ApplicationContext
         return menu;
     }
 
-    private void SwitchEngineMode(bool folderWatcher)
+    private void SwitchEngineMode(EngineMode mode)
     {
-        _engine.RestartIn(folderWatcher);
+        _engine.RestartIn(mode);
         ApplyStatus(_engine.Status, forceRefresh: true);
     }
 

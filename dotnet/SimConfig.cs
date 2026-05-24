@@ -72,25 +72,4 @@ public static class SimConfig
         if (GetInfiniteTeesPort() == 921) result |= SimTarget.InfiniteTees;
         return result;
     }
-
-    /// <summary>
-    /// Finds where folder-watcher-mode shots should be forwarded.
-    /// Prefers an explicit direct-mode sim on 921; otherwise falls back to
-    /// Infinite Tees's configured port (999 by default) so the standard setup still works.
-    /// </summary>
-    public static (SimTarget sim, int port) GetForwardTarget()
-    {
-        // Direct-mode sims listen on 921 — talk to them directly.
-        // If both are configured, only one can actually bind 921 at a time, but
-        // we just send to localhost:921 either way.
-        if (GetDrillsPort() == 921) return (SimTarget.Drills, 921);
-        if (GetInfiniteTeesPort() == 921) return (SimTarget.InfiniteTees, 921);
-
-        // Default: Infinite Tees on its standard 999 port.
-        var iteesPort = GetInfiniteTeesPort();
-        if (iteesPort.HasValue) return (SimTarget.InfiniteTees, iteesPort.Value);
-
-        // No sim config readable — assume Infinite Tees default.
-        return (SimTarget.InfiniteTees, 999);
-    }
 }
