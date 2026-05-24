@@ -25,17 +25,6 @@ The sim target (Infinite Tees by default; Drills also supported) is selected via
 
 If you use Drills instead of Infinite Tees, right-click the tray icon and pick **"Switch to Drills"** (or launch with `vx-connector.exe --watch-drills`). Drills uses port 921 by default; no further config needed.
 
-### CLI flags
-
-| Flag | Target sim |
-|---|---|
-| *(none)* | Infinite Tees (default) |
-| `--watch-drills` | Drills |
-| `--watch-itees` / `--watch-infinite-tees` | Infinite Tees |
-| `--folder-watcher` / `-w` | Infinite Tees (back-compat alias) |
-
-
-
 ## System Tray
 
 | Color  | Meaning                                                              |
