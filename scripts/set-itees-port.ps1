@@ -1,6 +1,6 @@
-# Sets the Infinite Tees listening port from 999 to 921 so VX Proxy will
-# auto-detect direct mode (proxy stays running for ProTee Labs's GSPconnect
-# check, but doesn't bind any port — ProTee Labs talks straight to iTees).
+# Sets the Infinite Tees listening port from 999 to 921 so ProTee Labs talks
+# straight to Infinite Tees without anything in the data path. Power-user
+# setup for the undocumented Direct mode (run vx-connector.exe --direct).
 #
 # Run scripts/reset-itees-port.ps1 to undo (921 -> 999).
 

@@ -28,10 +28,14 @@ static class Program
     /// <summary>
     /// CLI:
     ///   (none)                          → Folder Watcher → Infinite Tees (default)
-    ///   --direct                        → Direct
     ///   --watch-drills                  → Folder Watcher → Drills
     ///   --watch-itees / --watch-infinite-tees → Folder Watcher → Infinite Tees
     ///   --folder-watcher / -w           → alias for --watch-itees (back-compat)
+    ///
+    /// --direct exists but is intentionally undocumented; Direct mode is hidden
+    /// from users since v1.3.x. Kept as an escape hatch for the rare case where
+    /// someone wants VX Connector to just exist as a tray process without
+    /// forwarding any shots themselves.
     /// </summary>
     private static EngineMode ParseStartupMode(string[] args)
     {
@@ -51,9 +55,10 @@ static class Program
     }
 
     /// <summary>
-    /// Kill any other VxProxy instances (running our exact same binary path).
-    /// Real GSPconnect.exe at the canonical GSPro install path is left alone —
-    /// we only target processes whose module path matches our own.
+    /// Kill any other VX Connector instances (running our exact same binary path).
+    /// Also reaps stale "GSPconnect" processes left over from v1.2.x/v1.3.0 binaries
+    /// in any location — those mimicked the licensed GSPconnect.exe name, and
+    /// upgraders may still have one running when they first launch the renamed exe.
     /// </summary>
     private static void KillOlderInstances()
     {
@@ -62,25 +67,36 @@ static class Program
 
         var currentPid = Environment.ProcessId;
 
-        foreach (var p in Process.GetProcessesByName("GSPconnect"))
+        // "vx-connector" = current name; "GSPconnect" = legacy name (v1.3.0 and earlier).
+        // For the legacy name we only kill processes outside the canonical GSPro install
+        // path so we don't disturb the real licensed binary.
+        foreach (var name in new[] { "vx-connector", "GSPconnect" })
         {
-            if (p.Id == currentPid) continue;
-            try
+            foreach (var p in Process.GetProcessesByName(name))
             {
-                if (string.Equals(p.MainModule?.FileName, currentPath, StringComparison.OrdinalIgnoreCase))
+                if (p.Id == currentPid) continue;
+                try
                 {
-                    p.Kill(entireProcessTree: true);
-                    p.WaitForExit(2000);
+                    var modulePath = p.MainModule?.FileName;
+                    bool isOurself = string.Equals(modulePath, currentPath, StringComparison.OrdinalIgnoreCase);
+                    bool isLegacyOurs = name == "GSPconnect" && modulePath is not null
+                        && !modulePath.StartsWith(@"C:\GSPro\", StringComparison.OrdinalIgnoreCase);
+
+                    if (isOurself || isLegacyOurs)
+                    {
+                        p.Kill(entireProcessTree: true);
+                        p.WaitForExit(2000);
+                    }
                 }
-            }
-            catch
-            {
-                // Most likely Access Denied — that's expected for the real GSPconnect.exe
-                // (different binary, possibly different user/elevation). Skip it.
-            }
-            finally
-            {
-                p.Dispose();
+                catch
+                {
+                    // Most likely Access Denied — that's expected for the real licensed
+                    // GSPconnect.exe (different binary, possibly different user/elevation). Skip it.
+                }
+                finally
+                {
+                    p.Dispose();
+                }
             }
         }
     }

@@ -22,10 +22,12 @@ public record ShotInfo(
 
 /// <summary>
 /// Runs in one of two modes:
-///   Direct        - process exists only to satisfy ProTee Labs's GSPconnect.exe
-///                   check. ProTee Labs talks straight to the target sim on :921.
+///   Direct        - process exists as a tray-only idle process; ProTee Labs talks
+///                   straight to the target sim on :921. Hidden from UI as of v1.3.x;
+///                   reachable only via the undocumented --direct flag.
 ///   FolderWatcher - watches ProTee's shots folder, converts each shot to
-///                   OpenConnect JSON, forwards it to the target sim's port.
+///                   OpenConnect JSON, forwards it to the chosen sim over a
+///                   persistent TCP connection.
 /// </summary>
 public class ProxyEngine : IDisposable
 {

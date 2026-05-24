@@ -27,17 +27,6 @@ public static class SimConfig
         return match.Success && int.TryParse(match.Groups[1].Value, out var p) ? p : null;
     }
 
-    /// <summary>Rewrites Infinite Tees's listening port. Returns true if the file was changed.</summary>
-    public static bool SetInfiniteTeesPort(int newPort)
-    {
-        if (!File.Exists(InfiniteTeesIniPath)) return false;
-        var content = File.ReadAllText(InfiniteTeesIniPath);
-        var updated = PortRegex.Replace(content, $"Port={newPort}");
-        if (updated == content) return false;
-        File.WriteAllText(InfiniteTeesIniPath, updated);
-        return true;
-    }
-
     /// <summary>Returns the port Drills is configured for, or null if not found / unreadable.</summary>
     public static int? GetDrillsPort()
     {

@@ -117,10 +117,6 @@ public class TrayApplicationContext : ApplicationContext
         menu.Items.Add("Show Log", null, (_, _) => ShowForm());
         menu.Items.Add(new ToolStripSeparator());
 
-        var toDirectItem = menu.Items.Add(
-            "Switch to Direct mode",
-            null,
-            (_, _) => SwitchEngineMode(EngineMode.Direct));
         var toFolderWatcherDrillsItem = menu.Items.Add(
             "Switch to Folder Watcher → Drills",
             null,
@@ -130,25 +126,13 @@ public class TrayApplicationContext : ApplicationContext
             null,
             (_, _) => SwitchEngineMode(EngineMode.FolderWatcherInfiniteTees));
 
-        var iteesSeparator = new ToolStripSeparator();
-        menu.Items.Add(iteesSeparator);
-        var iteesToDirectItem = menu.Items.Add(
-            "Switch Infinite Tees to Direct mode (port 921)",
-            null,
-            (_, _) => SwitchInfiniteTeesToDirect());
-
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Quit", null, (_, _) => Quit());
 
         menu.Opening += (_, _) =>
         {
-            toDirectItem.Visible = _engine.Mode != EngineMode.Direct;
             toFolderWatcherDrillsItem.Visible = _engine.Mode != EngineMode.FolderWatcherDrills;
             toFolderWatcherIteesItem.Visible = _engine.Mode != EngineMode.FolderWatcherInfiniteTees;
-
-            var iteesPort = SimConfig.GetInfiniteTeesPort();
-            iteesToDirectItem.Visible = iteesPort == 999;
-            iteesSeparator.Visible = iteesPort == 999;
         };
 
         return menu;
@@ -158,40 +142,6 @@ public class TrayApplicationContext : ApplicationContext
     {
         _engine.RestartIn(mode);
         ApplyStatus(_engine.Status, forceRefresh: true);
-    }
-
-    private void SwitchInfiniteTeesToDirect()
-    {
-        const int newPort = 921;
-        const int oldPort = 999;
-
-        var prompt = $"Change the Infinite Tees listening port from {oldPort} to {newPort}?\n\n" +
-                     "This puts Infinite Tees on the port ProTee Labs sends to, so Direct mode works without VX Proxy in the data path.\n" +
-                     "You'll need to restart Infinite Tees for the change to take effect.";
-
-        var result = MessageBox.Show(
-            prompt,
-            "Switch Infinite Tees to Direct mode",
-            MessageBoxButtons.OKCancel,
-            MessageBoxIcon.Question);
-
-        if (result != DialogResult.OK) return;
-
-        if (!SimConfig.SetInfiniteTeesPort(newPort))
-        {
-            MessageBox.Show(
-                $"Could not update {SimConfig.InfiniteTeesIniPath}.\nFile may be missing or read-only.",
-                "VX Proxy",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
-            return;
-        }
-
-        MessageBox.Show(
-            $"Infinite Tees port set to {newPort}.\n\nRestart Infinite Tees so the new port takes effect.",
-            "VX Proxy",
-            MessageBoxButtons.OK,
-            MessageBoxIcon.Information);
     }
 
     private void ShowForm()
