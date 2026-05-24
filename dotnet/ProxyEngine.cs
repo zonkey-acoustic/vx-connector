@@ -57,6 +57,23 @@ public class ProxyEngine : IDisposable
     public event Action<string>? Log;
     public event Action<ConnectionStatus>? StatusChanged;
     public event Action<ShotInfo>? ShotReceived;
+    public event Action<bool>? ConnectionStateChanged;
+
+    private bool _isConnected;
+    /// <summary>
+    /// True when the persistent TCP connection to the sim is currently established.
+    /// Only meaningful in Folder Watcher modes; always false in Direct mode and when stopped.
+    /// </summary>
+    public bool IsConnected
+    {
+        get => _isConnected;
+        private set
+        {
+            if (_isConnected == value) return;
+            _isConnected = value;
+            ConnectionStateChanged?.Invoke(value);
+        }
+    }
 
     public ConnectionStatus Status =>
         !IsRunning ? ConnectionStatus.Stopped :
@@ -235,6 +252,7 @@ public class ProxyEngine : IDisposable
 
             _persistentClient = client;
             _persistentStream = client.GetStream();
+            IsConnected = true;
             Emit($"Connected to {sim} on :{port} (persistent).");
 
             // Background reader; captured stream so it survives field swaps.
@@ -334,6 +352,7 @@ public class ProxyEngine : IDisposable
         var client = _persistentClient;
         _persistentStream = null;
         _persistentClient = null;
+        IsConnected = false;
         try { stream?.Dispose(); } catch { }
         try { client?.Dispose(); } catch { }
     }

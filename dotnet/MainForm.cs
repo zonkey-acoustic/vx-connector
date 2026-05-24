@@ -124,6 +124,15 @@ public class MainForm : Form
                 RefreshStatus(status);
         };
 
+        _engine.ConnectionStateChanged += _ =>
+        {
+            // Status text depends on IsConnected; just re-render with the current Status.
+            if (InvokeRequired)
+                BeginInvoke(() => RefreshStatus(_engine.Status));
+            else
+                RefreshStatus(_engine.Status);
+        };
+
         _engine.ShotReceived += shot =>
         {
             void Update() => _shotLabel.Text =
@@ -193,7 +202,7 @@ public class MainForm : Form
             ConnectionStatus.Direct =>
                 (Color.FromArgb(33, 150, 243), DirectStatusText()),
             ConnectionStatus.FolderWatcher =>
-                (Color.FromArgb(156, 39, 176), FolderWatcherStatusText()),
+                FolderWatcherStatusVisuals(),
             _ =>
                 (Color.FromArgb(244, 67, 54), "Stopped"),
         };
@@ -207,10 +216,12 @@ public class MainForm : Form
         return $"Direct mode — ProTee Labs talks straight to {label}";
     }
 
-    private string FolderWatcherStatusText()
+    private (Color color, string text) FolderWatcherStatusVisuals()
     {
         var (sim, port) = _engine.ResolveForwardTarget();
-        return $"Folder watcher mode — shots forwarded to {sim} on port {port}";
+        return _engine.IsConnected
+            ? (Color.FromArgb(76, 175, 80), $"Connected to {sim} on port {port}")        // green
+            : (Color.FromArgb(255, 152, 0), $"Disconnected from {sim} on port {port}");  // amber
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
