@@ -100,7 +100,7 @@ public class ProxyEngine : IDisposable
         IsRunning = true;
         var directTarget = SimConfig.DetectDirectTarget();
         var label = directTarget == SimTarget.None ? "the target sim" : directTarget.ToString();
-        Emit($"Direct mode — VX Proxy is idle. ProTee Labs talks straight to {label} on :921.");
+        Emit($"Direct mode — VX Connector is idle. ProTee Labs talks straight to {label} on :921.");
         OnStatusChanged();
         return true;
     }

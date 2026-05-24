@@ -1,9 +1,9 @@
-# Resets the Infinite Tees listening port from 921 back to 999.
-# Use this if you previously ran the old set-itees-port.ps1 script
-# and want VX Proxy to run in normal proxy mode (port 921 -> 999).
+# Resets the Infinite Tees listening port from 921 back to its default 999.
+# Use this if you previously ran set-itees-port.ps1 (for the old Direct mode)
+# and want Infinite Tees back on its standard port.
 #
-# If iTees is left on Port=921, VX Proxy will auto-detect that and run
-# in passthrough mode instead.
+# VX Connector reads whatever port Infinite Tees is configured for, so this
+# script is purely about restoring defaults — not required for the app to work.
 
 $iniPath = "$env:LOCALAPPDATA\InfiniteTees\Saved\Config\Windows\GameUserSettings.ini"
 

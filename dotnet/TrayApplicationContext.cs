@@ -17,7 +17,7 @@ public class TrayApplicationContext : ApplicationContext
         _tray = new NotifyIcon
         {
             Icon = CreateIcon(Color.FromArgb(255, 152, 0)),
-            Text = "VX Proxy — Starting",
+            Text = "VX Connector — Starting",
             Visible = true,
             ContextMenuStrip = BuildMenu(),
         };
@@ -46,7 +46,7 @@ public class TrayApplicationContext : ApplicationContext
             ConnectionStatus.FolderWatcher =>
                 (Color.FromArgb(156, 39, 176), FolderWatcherStatusText()),
             _ =>
-                (Color.FromArgb(244, 67, 54), "VX Proxy — Stopped"),
+                (Color.FromArgb(244, 67, 54), "VX Connector — Stopped"),
         };
 
         if (_form.InvokeRequired)
@@ -66,7 +66,7 @@ public class TrayApplicationContext : ApplicationContext
     private string DirectStatusText()
     {
         var label = FormatSims(_detectedSim) ?? "passthrough";
-        return $"VX Proxy — Direct mode ({label})";
+        return $"VX Connector — Direct mode ({label})";
     }
 
     internal static string? FormatSims(SimTarget sims)
@@ -81,7 +81,7 @@ public class TrayApplicationContext : ApplicationContext
     private string FolderWatcherStatusText()
     {
         var (sim, port) = _engine.ResolveForwardTarget();
-        return $"VX Proxy — Folder watcher → {sim} :{port}";
+        return $"VX Connector — {sim} :{port}";
     }
 
     /// <summary>
@@ -118,11 +118,11 @@ public class TrayApplicationContext : ApplicationContext
         menu.Items.Add(new ToolStripSeparator());
 
         var toFolderWatcherDrillsItem = menu.Items.Add(
-            "Switch to Folder Watcher → Drills",
+            "Switch to Drills",
             null,
             (_, _) => SwitchEngineMode(EngineMode.FolderWatcherDrills));
         var toFolderWatcherIteesItem = menu.Items.Add(
-            "Switch to Folder Watcher → Infinite Tees",
+            "Switch to Infinite Tees",
             null,
             (_, _) => SwitchEngineMode(EngineMode.FolderWatcherInfiniteTees));
 
@@ -141,6 +141,7 @@ public class TrayApplicationContext : ApplicationContext
     private void SwitchEngineMode(EngineMode mode)
     {
         _engine.RestartIn(mode);
+        UserSettings.SaveLastMode(mode);
         ApplyStatus(_engine.Status, forceRefresh: true);
     }
 

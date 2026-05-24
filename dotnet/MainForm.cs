@@ -17,7 +17,7 @@ public class MainForm : Form
         _engine = engine;
         _detectedSim = detectedSim;
 
-        Text = "VX Proxy";
+        Text = "VX Connector";
         Icon = CreateGolfBallIcon();
         Size = new Size(750, 500);
         MinimumSize = new Size(500, 300);

@@ -15,7 +15,7 @@ The sim target (Infinite Tees by default; Drills also supported) is selected via
 
 1. **Download** `vx-connector.exe` from the [latest release](https://github.com/zonkey-acoustic/itees-vx-connector/releases/latest) (or build from source — see below).
 
-2. **Launch VX Connector** — double-click `vx-connector.exe`. The tray icon turns purple and tooltip shows *"VX Proxy — Folder watcher → InfiniteTees :999"*.
+2. **Launch VX Connector** — double-click `vx-connector.exe`. The tray icon turns purple and tooltip shows *"VX Connector — InfiniteTees :999"*.
 
 3. **Launch Infinite Tees** (or Drills — see below). Infinite Tees on its default port 999 — no configuration needed. Its UI should show "connected" because VX Connector holds a persistent TCP socket to it.
 
@@ -23,16 +23,16 @@ The sim target (Infinite Tees by default; Drills also supported) is selected via
 
 ### Drills
 
-If you use Drills instead of Infinite Tees, right-click the tray icon and pick **"Switch to Folder Watcher → Drills"** (or launch with `vx-connector.exe --watch-drills`). Drills uses port 921 by default; no further config needed.
+If you use Drills instead of Infinite Tees, right-click the tray icon and pick **"Switch to Drills"** (or launch with `vx-connector.exe --watch-drills`). Drills uses port 921 by default; no further config needed.
 
 ### CLI flags
 
-| Flag | Mode |
+| Flag | Target sim |
 |---|---|
-| *(none)* | Folder Watcher → Infinite Tees (default) |
-| `--watch-drills` | Folder Watcher → Drills |
-| `--watch-itees` / `--watch-infinite-tees` | Folder Watcher → Infinite Tees |
-| `--folder-watcher` / `-w` | Folder Watcher → Infinite Tees (back-compat alias) |
+| *(none)* | Infinite Tees (default) |
+| `--watch-drills` | Drills |
+| `--watch-itees` / `--watch-infinite-tees` | Infinite Tees |
+| `--folder-watcher` / `-w` | Infinite Tees (back-compat alias) |
 
 
 
@@ -46,8 +46,8 @@ If you use Drills instead of Infinite Tees, right-click the tray icon and pick *
 Hover the tray icon for the current sim target and port. Double-click to open the log window. Right-click for actions:
 
 - **Show Log** — open the log window
-- **Switch to Folder Watcher → Drills** — forward shots to Drills (default port 921)
-- **Switch to Folder Watcher → Infinite Tees** — forward shots to Infinite Tees (default port 999)
+- **Switch to Drills** — forward shots to Drills (default port 921)
+- **Switch to Infinite Tees** — forward shots to Infinite Tees (default port 999)
 - **Quit** — exit VX Connector
 
 The currently-active mode is hidden from the switcher list.

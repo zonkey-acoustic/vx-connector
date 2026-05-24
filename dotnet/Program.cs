@@ -19,7 +19,13 @@ static class Program
 
         ApplicationConfiguration.Initialize();
 
-        var startupMode = ParseStartupMode(args);
+        // Startup mode resolution: explicit CLI flag wins; otherwise fall back
+        // to whatever the user last picked via the tray menu (persisted); finally
+        // default to Folder Watcher → Infinite Tees if nothing's been saved.
+        var startupMode = ParseStartupModeFromArgs(args)
+            ?? UserSettings.LoadLastMode()
+            ?? EngineMode.FolderWatcherInfiniteTees;
+
         var detected = SimConfig.DetectDirectTarget();
 
         Application.Run(new TrayApplicationContext(startupMode, detected));
@@ -27,17 +33,22 @@ static class Program
 
     /// <summary>
     /// CLI:
-    ///   (none)                          → Folder Watcher → Infinite Tees (default)
+    ///   (none)                          → use persisted preference, else default
     ///   --watch-drills                  → Folder Watcher → Drills
     ///   --watch-itees / --watch-infinite-tees → Folder Watcher → Infinite Tees
     ///   --folder-watcher / -w           → alias for --watch-itees (back-compat)
+    ///
+    /// CLI flags are one-shot overrides: they pick the mode for this launch but
+    /// do not update the persisted preference. Use the tray menu to change the
+    /// sticky default.
     ///
     /// --direct exists but is intentionally undocumented; Direct mode is hidden
     /// from users since v1.3.x. Kept as an escape hatch for the rare case where
     /// someone wants VX Connector to just exist as a tray process without
     /// forwarding any shots themselves.
     /// </summary>
-    private static EngineMode ParseStartupMode(string[] args)
+    /// <returns>The mode the user explicitly requested via CLI, or null if no flag was passed.</returns>
+    private static EngineMode? ParseStartupModeFromArgs(string[] args)
     {
         foreach (var arg in args)
         {
@@ -51,7 +62,7 @@ static class Program
                 arg.Equals("-w", StringComparison.OrdinalIgnoreCase))
                 return EngineMode.FolderWatcherInfiniteTees;
         }
-        return EngineMode.FolderWatcherInfiniteTees;
+        return null;
     }
 
     /// <summary>
