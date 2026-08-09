@@ -201,8 +201,8 @@ public class MainForm : Form
         {
             ConnectionStatus.Direct =>
                 (Color.FromArgb(33, 150, 243), DirectStatusText()),
-            ConnectionStatus.FolderWatcher =>
-                FolderWatcherStatusVisuals(),
+            ConnectionStatus.Proxy or ConnectionStatus.FolderWatcher =>
+                ForwardingStatusVisuals(),
             _ =>
                 (Color.FromArgb(244, 67, 54), "Stopped"),
         };
@@ -216,12 +216,18 @@ public class MainForm : Form
         return $"Direct mode — ProTee Labs talks straight to {label}";
     }
 
-    private (Color color, string text) FolderWatcherStatusVisuals()
+    /// <summary>
+    /// Status for both forwarding modes. The dot tracks the downstream sim
+    /// connection; the legacy folder-watcher mode is called out by name so it's
+    /// obvious when you're on the path that no longer works with the PTL beta.
+    /// </summary>
+    private (Color color, string text) ForwardingStatusVisuals()
     {
         var (sim, port) = _engine.ResolveForwardTarget();
+        var suffix = _engine.FolderWatcherMode ? " (legacy folder watcher)" : "";
         return _engine.IsConnected
-            ? (Color.FromArgb(76, 175, 80), $"Connected to {sim} on port {port}")        // green
-            : (Color.FromArgb(255, 152, 0), $"Disconnected from {sim} on port {port}");  // amber
+            ? (Color.FromArgb(76, 175, 80), $"Connected to {sim} on port {port}{suffix}")        // green
+            : (Color.FromArgb(255, 152, 0), $"Disconnected from {sim} on port {port}{suffix}");  // amber
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)

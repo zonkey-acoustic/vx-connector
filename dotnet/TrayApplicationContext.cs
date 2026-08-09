@@ -8,7 +8,9 @@ public class TrayApplicationContext : ApplicationContext
     private readonly SimTarget _detectedSim;
     private ConnectionStatus _currentStatus;
 
-    public TrayApplicationContext(EngineMode startupMode = EngineMode.FolderWatcherInfiniteTees, SimTarget detectedSim = SimTarget.None)
+    public TrayApplicationContext(
+        EngineMode startupMode = EngineMode.ProxyInfiniteTees,
+        SimTarget detectedSim = SimTarget.None)
     {
         _detectedSim = detectedSim;
         _engine = new ProxyEngine { Mode = startupMode };
@@ -43,8 +45,10 @@ public class TrayApplicationContext : ApplicationContext
         {
             ConnectionStatus.Direct =>
                 (Color.FromArgb(33, 150, 243), DirectStatusText()),
+            ConnectionStatus.Proxy =>
+                (Color.FromArgb(156, 39, 176), ForwardingStatusText("Proxy")),
             ConnectionStatus.FolderWatcher =>
-                (Color.FromArgb(156, 39, 176), FolderWatcherStatusText()),
+                (Color.FromArgb(0, 150, 136), ForwardingStatusText("Legacy")),
             _ =>
                 (Color.FromArgb(244, 67, 54), "VX Connector — Stopped"),
         };
@@ -78,10 +82,10 @@ public class TrayApplicationContext : ApplicationContext
         return string.Join("/", parts);
     }
 
-    private string FolderWatcherStatusText()
+    private string ForwardingStatusText(string modeLabel)
     {
         var (sim, port) = _engine.ResolveForwardTarget();
-        return $"VX Connector — {sim} :{port}";
+        return $"VX Connector — {modeLabel} → {sim} :{port}";
     }
 
     /// <summary>
@@ -117,22 +121,37 @@ public class TrayApplicationContext : ApplicationContext
         menu.Items.Add("Show Log", null, (_, _) => ShowForm());
         menu.Items.Add(new ToolStripSeparator());
 
-        var toFolderWatcherDrillsItem = menu.Items.Add(
+        var toDrillsItem = menu.Items.Add(
             "Switch to Drills",
             null,
-            (_, _) => SwitchEngineMode(EngineMode.FolderWatcherDrills));
-        var toFolderWatcherIteesItem = menu.Items.Add(
+            (_, _) => SwitchEngineMode(EngineMode.ProxyDrills));
+        var toIteesItem = menu.Items.Add(
             "Switch to Infinite Tees",
             null,
+            (_, _) => SwitchEngineMode(EngineMode.ProxyInfiniteTees));
+
+        // Folder Watcher only works on ProTee Labs builds that still write
+        // ShotData.json — the beta doesn't. Kept reachable, but out of the way.
+        var legacyMenu = new ToolStripMenuItem("Legacy (pre-beta ProTee Labs)");
+        var toWatchDrillsItem = legacyMenu.DropDownItems.Add(
+            "Folder Watcher → Drills",
+            null,
+            (_, _) => SwitchEngineMode(EngineMode.FolderWatcherDrills));
+        var toWatchIteesItem = legacyMenu.DropDownItems.Add(
+            "Folder Watcher → Infinite Tees",
+            null,
             (_, _) => SwitchEngineMode(EngineMode.FolderWatcherInfiniteTees));
+        menu.Items.Add(legacyMenu);
 
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Quit", null, (_, _) => Quit());
 
         menu.Opening += (_, _) =>
         {
-            toFolderWatcherDrillsItem.Visible = _engine.Mode != EngineMode.FolderWatcherDrills;
-            toFolderWatcherIteesItem.Visible = _engine.Mode != EngineMode.FolderWatcherInfiniteTees;
+            toDrillsItem.Visible = _engine.Mode != EngineMode.ProxyDrills;
+            toIteesItem.Visible = _engine.Mode != EngineMode.ProxyInfiniteTees;
+            toWatchDrillsItem.Visible = _engine.Mode != EngineMode.FolderWatcherDrills;
+            toWatchIteesItem.Visible = _engine.Mode != EngineMode.FolderWatcherInfiniteTees;
         };
 
         return menu;

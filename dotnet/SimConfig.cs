@@ -53,7 +53,13 @@ public static class SimConfig
         return null;
     }
 
-    /// <summary>Detects every sim configured for the proxy-bypass port 921 (may return a combined flags value).</summary>
+    /// <summary>
+    /// Detects every sim configured for port 921 (may return a combined flags value).
+    ///
+    /// Only used for Direct mode's status text. Direct mode assumed ProTee Labs could
+    /// reach the sim itself on :921 — a lane removed in PTL 1.12.9.0 — so this is
+    /// vestigial on current ProTee Labs builds.
+    /// </summary>
     public static SimTarget DetectDirectTarget()
     {
         var result = SimTarget.None;

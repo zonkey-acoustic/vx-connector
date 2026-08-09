@@ -15,6 +15,14 @@ static class Program
     [STAThread]
     static void Main(string[] args)
     {
+        // Launched as our own GSPconnect.exe stub: park and do nothing else. Must be
+        // checked before anything that creates windows or kills sibling processes.
+        if (args.Any(a => a.Equals(GspConnectStub.StubArgument, StringComparison.OrdinalIgnoreCase)))
+        {
+            GspConnectStub.RunAsStub();
+            return;
+        }
+
         KillOlderInstances();
 
         ApplicationConfiguration.Initialize();
@@ -24,7 +32,7 @@ static class Program
         // default to Folder Watcher → Infinite Tees if nothing's been saved.
         var startupMode = ParseStartupModeFromArgs(args)
             ?? UserSettings.LoadLastMode()
-            ?? EngineMode.FolderWatcherInfiniteTees;
+            ?? EngineMode.ProxyInfiniteTees;
 
         var detected = SimConfig.DetectDirectTarget();
 
@@ -34,8 +42,10 @@ static class Program
     /// <summary>
     /// CLI:
     ///   (none)                          → use persisted preference, else default
-    ///   --watch-drills                  → Folder Watcher → Drills
-    ///   --watch-itees / --watch-infinite-tees → Folder Watcher → Infinite Tees
+    ///   --proxy-drills                  → Proxy → Drills
+    ///   --proxy-itees / --proxy-infinite-tees → Proxy → Infinite Tees
+    ///   --watch-drills                  → Folder Watcher → Drills (legacy PTL only)
+    ///   --watch-itees / --watch-infinite-tees → Folder Watcher → Infinite Tees (legacy)
     ///   --folder-watcher / -w           → alias for --watch-itees (back-compat)
     ///
     /// CLI flags are one-shot overrides: they pick the mode for this launch but
@@ -54,6 +64,11 @@ static class Program
         {
             if (arg.Equals("--direct", StringComparison.OrdinalIgnoreCase))
                 return EngineMode.Direct;
+            if (arg.Equals("--proxy-drills", StringComparison.OrdinalIgnoreCase))
+                return EngineMode.ProxyDrills;
+            if (arg.Equals("--proxy-itees", StringComparison.OrdinalIgnoreCase) ||
+                arg.Equals("--proxy-infinite-tees", StringComparison.OrdinalIgnoreCase))
+                return EngineMode.ProxyInfiniteTees;
             if (arg.Equals("--watch-drills", StringComparison.OrdinalIgnoreCase))
                 return EngineMode.FolderWatcherDrills;
             if (arg.Equals("--watch-itees", StringComparison.OrdinalIgnoreCase) ||
@@ -66,10 +81,16 @@ static class Program
     }
 
     /// <summary>
-    /// Kill any other VX Connector instances (running our exact same binary path).
-    /// Also reaps stale "GSPconnect" processes left over from v1.2.x/v1.3.0 binaries
-    /// in any location — those mimicked the licensed GSPconnect.exe name, and
-    /// upgraders may still have one running when they first launch the renamed exe.
+    /// Kill any other VX Connector instances (running our exact same binary path),
+    /// including stub children they left behind.
+    ///
+    /// Note this deliberately does NOT reap stray "GSPconnect" processes any more.
+    /// Up to v1.3.1 it did, treating them as legacy leftovers from when our exe
+    /// mimicked that name. Since PTL beta 1.12.9.0 that name is load-bearing again:
+    /// a running GSPconnect.exe is what opens the :12321 lane (see
+    /// <see cref="GspConnectStub"/>), so killing one would close the only route
+    /// shot data has. Stubs are owned by the instance that started them and are
+    /// cleaned up on exit.
     /// </summary>
     private static void KillOlderInstances()
     {
@@ -78,36 +99,25 @@ static class Program
 
         var currentPid = Environment.ProcessId;
 
-        // "vx-connector" = current name; "GSPconnect" = legacy name (v1.3.0 and earlier).
-        // For the legacy name we only kill processes outside the canonical GSPro install
-        // path so we don't disturb the real licensed binary.
-        foreach (var name in new[] { "vx-connector", "GSPconnect" })
+        foreach (var p in Process.GetProcessesByName("vx-connector"))
         {
-            foreach (var p in Process.GetProcessesByName(name))
+            if (p.Id == currentPid) continue;
+            try
             {
-                if (p.Id == currentPid) continue;
-                try
+                if (string.Equals(p.MainModule?.FileName, currentPath, StringComparison.OrdinalIgnoreCase))
                 {
-                    var modulePath = p.MainModule?.FileName;
-                    bool isOurself = string.Equals(modulePath, currentPath, StringComparison.OrdinalIgnoreCase);
-                    bool isLegacyOurs = name == "GSPconnect" && modulePath is not null
-                        && !modulePath.StartsWith(@"C:\GSPro\", StringComparison.OrdinalIgnoreCase);
-
-                    if (isOurself || isLegacyOurs)
-                    {
-                        p.Kill(entireProcessTree: true);
-                        p.WaitForExit(2000);
-                    }
+                    // entireProcessTree takes the old instance's GSPconnect stub with it.
+                    p.Kill(entireProcessTree: true);
+                    p.WaitForExit(2000);
                 }
-                catch
-                {
-                    // Most likely Access Denied — that's expected for the real licensed
-                    // GSPconnect.exe (different binary, possibly different user/elevation). Skip it.
-                }
-                finally
-                {
-                    p.Dispose();
-                }
+            }
+            catch
+            {
+                // Access Denied on a process we don't own — leave it be.
+            }
+            finally
+            {
+                p.Dispose();
             }
         }
     }

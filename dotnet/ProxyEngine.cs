@@ -6,9 +6,16 @@ using System.Text.RegularExpressions;
 
 namespace VxProxy;
 
-public enum ConnectionStatus { Stopped, Direct, FolderWatcher }
+public enum ConnectionStatus { Stopped, Direct, FolderWatcher, Proxy }
 
-public enum EngineMode { Direct, FolderWatcherDrills, FolderWatcherInfiniteTees }
+public enum EngineMode
+{
+    Direct,
+    FolderWatcherDrills,
+    FolderWatcherInfiniteTees,
+    ProxyDrills,
+    ProxyInfiniteTees,
+}
 
 public record ShotInfo(
     int ShotNumber,
@@ -21,13 +28,17 @@ public record ShotInfo(
 );
 
 /// <summary>
-/// Runs in one of two modes:
-///   Direct        - process exists as a tray-only idle process; ProTee Labs talks
-///                   straight to the target sim on :921. Hidden from UI as of v1.3.x;
-///                   reachable only via the undocumented --direct flag.
-///   FolderWatcher - watches ProTee's shots folder, converts each shot to
-///                   OpenConnect JSON, forwards it to the chosen sim over a
-///                   persistent TCP connection.
+/// Runs in one of three modes:
+///   Proxy         - the default since ProTee Labs beta 1.12.9.0. We hold open a
+///                   GSPconnect.exe stub so PTL will dial us on :12321, accept its
+///                   OpenConnect stream, and relay each message to the chosen sim
+///                   over a persistent TCP connection (adding the newline the sims
+///                   expect but PTL doesn't send). Sim acks are relayed back upstream.
+///   FolderWatcher - legacy. Watches ProTee's shots folder and converts each
+///                   ShotData.json to OpenConnect JSON. Only works on pre-beta
+///                   ProTee Labs; the beta no longer writes that file.
+///   Direct        - process exists as a tray-only idle process. Hidden from UI as of
+///                   v1.3.x; reachable only via the undocumented --direct flag.
 /// </summary>
 public class ProxyEngine : IDisposable
 {
@@ -35,6 +46,7 @@ public class ProxyEngine : IDisposable
 
     private CancellationTokenSource? _cts;
     private ShotFolderWatcher? _folderWatcher;
+    private OpenConnectListener? _listener;
     private int _watcherShotNumber;
 
     // Persistent TCP connection to the sim (Folder Watcher mode). Held for the
@@ -49,10 +61,23 @@ public class ProxyEngine : IDisposable
     public int ShotCount { get; private set; }
     public bool IsRunning { get; private set; }
 
-    /// <summary>Which mode Start() runs. Default Folder Watcher → Infinite Tees.</summary>
-    public EngineMode Mode { get; set; } = EngineMode.FolderWatcherInfiniteTees;
+    // No application-level keep-alive is needed. Infinite Tees's config carries
+    // ClientIdleTimeoutSec=10 under [/Script/OPENGS.SafeSocketHubSubsystem], which
+    // looked like it would drop us between shots — but measured against the real sim,
+    // an idle connection survived 80s+ untouched and the UI stayed "connected".
+    // A heartbeat was implemented, tested, and removed as unnecessary.
 
-    public bool FolderWatcherMode => Mode != EngineMode.Direct;
+    /// <summary>Which mode Start() runs. Default Proxy → Infinite Tees.</summary>
+    public EngineMode Mode { get; set; } = EngineMode.ProxyInfiniteTees;
+
+    public bool FolderWatcherMode =>
+        Mode is EngineMode.FolderWatcherDrills or EngineMode.FolderWatcherInfiniteTees;
+
+    public bool ProxyMode =>
+        Mode is EngineMode.ProxyDrills or EngineMode.ProxyInfiniteTees;
+
+    /// <summary>True in any mode that forwards shots to a sim.</summary>
+    public bool ForwardingMode => Mode != EngineMode.Direct;
 
     public event Action<string>? Log;
     public event Action<ConnectionStatus>? StatusChanged;
@@ -78,6 +103,7 @@ public class ProxyEngine : IDisposable
     public ConnectionStatus Status =>
         !IsRunning ? ConnectionStatus.Stopped :
         Mode == EngineMode.Direct ? ConnectionStatus.Direct :
+        ProxyMode ? ConnectionStatus.Proxy :
         ConnectionStatus.FolderWatcher;
 
     public bool Start()
@@ -86,7 +112,53 @@ public class ProxyEngine : IDisposable
 
         _cts = new CancellationTokenSource();
 
-        if (Mode != EngineMode.Direct)
+        if (ProxyMode)
+        {
+            var (proxySim, proxyPort) = ResolveForwardTarget();
+
+            // We listen on 12321; forwarding there would just loop back to us.
+            if (proxyPort == OpenConnectListener.DefaultPort)
+            {
+                Emit($"{proxySim} is configured for port {proxyPort}, which is the port " +
+                     "ProTee Labs connects to us on. Change the sim to a different port.");
+                _cts.Dispose();
+                _cts = null;
+                return false;
+            }
+
+            // Without a GSPconnect.exe process, ProTee Labs never opens the lane.
+            GspConnectStub.Ensure(Emit);
+
+            _listener = new OpenConnectListener();
+            _listener.Log += Emit;
+            _listener.Error += Emit;
+            _listener.MessageReceived += json => _ = HandleUpstreamMessageAsync(json, _cts.Token);
+            _listener.UpstreamConnectionChanged += connected =>
+                Emit(connected
+                    ? "ProTee Labs is connected — waiting for shots."
+                    : "ProTee Labs disconnected.");
+
+            if (!_listener.Start())
+            {
+                _listener.Dispose();
+                _listener = null;
+                GspConnectStub.Stop();
+                _cts.Dispose();
+                _cts = null;
+                return false;
+            }
+
+            IsRunning = true;
+            Emit($"Proxy mode — forwarding shots to {proxySim} at {ForwardHost}:{proxyPort}.");
+            OnStatusChanged();
+
+            // Connect to the sim up front so its UI shows us as connected from the
+            // moment we start, not just on the first shot.
+            _ = TryConnectAsync(_cts.Token);
+            return true;
+        }
+
+        if (FolderWatcherMode)
         {
             _folderWatcher = new ShotFolderWatcher(ShotFolderWatcher.DefaultShotsDirectory);
             _folderWatcher.Log += Emit;
@@ -129,12 +201,12 @@ public class ProxyEngine : IDisposable
     /// </summary>
     public (SimTarget sim, int port) ResolveForwardTarget() => Mode switch
     {
-        EngineMode.FolderWatcherDrills =>
+        EngineMode.FolderWatcherDrills or EngineMode.ProxyDrills =>
             (SimTarget.Drills, SimConfig.GetDrillsPort() ?? 921),
-        EngineMode.FolderWatcherInfiniteTees =>
+        EngineMode.FolderWatcherInfiniteTees or EngineMode.ProxyInfiniteTees =>
             (SimTarget.InfiniteTees, SimConfig.GetInfiniteTeesPort() ?? 999),
         _ => throw new InvalidOperationException(
-            "ResolveForwardTarget is only valid in a folder-watcher mode."),
+            "ResolveForwardTarget is only valid in a forwarding mode."),
     };
 
     public void Stop()
@@ -144,6 +216,9 @@ public class ProxyEngine : IDisposable
         _cts?.Cancel();
         _folderWatcher?.Dispose();
         _folderWatcher = null;
+        _listener?.Dispose();
+        _listener = null;
+        GspConnectStub.Stop();
         // Disposing the connection forces any in-flight ReadAsync to unblock
         // (cancellation doesn't propagate cleanly through socket reads on Windows).
         DisposeConnection();
@@ -159,6 +234,98 @@ public class ProxyEngine : IDisposable
         Mode = mode;
         if (IsRunning) Stop();
         return Start();
+    }
+
+    /// <summary>
+    /// Relay one OpenConnect message from ProTee Labs to the sim.
+    ///
+    /// Forwarded verbatim: PTL's JSON is already the format the sims expect, so
+    /// re-serializing would only risk field drift. The one change is appending the
+    /// newline PTL omits on this lane but the sims require as a message delimiter.
+    ///
+    /// PTL splits a shot across messages inconsistently — sometimes one combined
+    /// ball+club message, sometimes ball-only then club-only under the same
+    /// ShotNumber. We pass each through as-is rather than trying to merge, which is
+    /// what the sims already expect (see samples/itees-protee.pcapng).
+    /// </summary>
+    private async Task HandleUpstreamMessageAsync(string json, CancellationToken ct)
+    {
+        try
+        {
+            var bytes = Encoding.UTF8.GetBytes(json + "\n");
+            LogShotFromUpstream(json);
+
+            for (int attempt = 1; attempt <= 2; attempt++)
+            {
+                if (!await EnsureConnectedAsync(ct))
+                {
+                    if (attempt == 2) Emit("  Message dropped: no connection to sim.");
+                    continue;
+                }
+
+                if (await TryWriteAsync(bytes, ct)) return;
+
+                if (attempt == 1) Emit("  Reconnecting and retrying...");
+            }
+            Emit("  Message dropped: could not send after reconnect.");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Emit($"Upstream message handler error: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Read-only inspection of a relayed message purely to drive the UI. Only
+    /// messages actually carrying ball data count as shots; the status and
+    /// heartbeat messages PTL interleaves are relayed but not counted.
+    /// </summary>
+    private void LogShotFromUpstream(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            var options = root.TryGetProperty("ShotDataOptions", out var o) ? o : default;
+            bool hasBall = options.ValueKind == JsonValueKind.Object
+                && options.TryGetProperty("ContainsBallData", out var cb)
+                && cb.ValueKind == JsonValueKind.True;
+            bool hasClub = options.ValueKind == JsonValueKind.Object
+                && options.TryGetProperty("ContainsClubData", out var cc)
+                && cc.ValueKind == JsonValueKind.True;
+
+            if (!hasBall && !hasClub) return;   // status / heartbeat — relayed, not a shot
+
+            var ball = root.TryGetProperty("BallData", out var b) ? b : default;
+            var club = root.TryGetProperty("ClubData", out var c) ? c : default;
+
+            // ProTee Labs owns the shot numbering on this lane; pass it through.
+            int shotNum = root.TryGetProperty("ShotNumber", out var sn)
+                && sn.ValueKind == JsonValueKind.Number ? sn.GetInt32() : 0;
+
+            var ballSpeed = ParseNumeric(ball, "Speed");
+            var spin = ParseNumeric(ball, "TotalSpin");
+            var vla = ParseNumeric(ball, "VLA");
+            var clubSpeed = ParseNumeric(club, "Speed");
+
+            // When PTL splits a swing it sends ball-only then club-only under one
+            // ShotNumber. The ball message is the shot; the club follow-up is noted
+            // but must not count again or re-fire the shot readout.
+            if (!hasBall)
+            {
+                Emit($"  Club data for #{shotNum}: ClubSpeed={clubSpeed:F1}");
+                return;
+            }
+
+            Emit($"SHOT #{shotNum} [Proxy] Speed={ballSpeed:F1} Spin={spin:F0} VLA={vla:F1} ClubSpeed={clubSpeed:F1}");
+            ShotCount++;
+            ShotReceived?.Invoke(new ShotInfo(shotNum, ballSpeed, spin, vla, clubSpeed, hasBall, hasClub));
+        }
+        catch (JsonException)
+        {
+            Emit("  Relayed a message that wasn't valid JSON.");
+        }
     }
 
     private async Task HandleShotFolderAsync(string shotDir, CancellationToken ct)
@@ -330,7 +497,15 @@ public class ProxyEngine : IDisposable
                     return;
                 }
 
-                LogServerResponse(buf[..read]);
+                var response = buf[..read];
+                LogServerResponse(response);
+
+                // In proxy mode ProTee Labs is the real client — it needs the sim's
+                // acks to consider the connection healthy, so pass them straight back.
+                if (_listener is not null)
+                {
+                    await _listener.SendUpstreamAsync(response, ct);
+                }
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
