@@ -144,10 +144,22 @@ public class TrayApplicationContext : ApplicationContext
         menu.Items.Add(legacyMenu);
 
         menu.Items.Add(new ToolStripSeparator());
+        var startWithWindowsItem = new ToolStripMenuItem("Start with Windows")
+        {
+            CheckOnClick = false,   // we set the check from the registry, not from the click
+        };
+        startWithWindowsItem.Click += (_, _) => ToggleStartWithWindows(startWithWindowsItem);
+        menu.Items.Add(startWithWindowsItem);
+
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Quit", null, (_, _) => Quit());
 
         menu.Opening += (_, _) =>
         {
+            // Read from the registry each time: the user can also remove the entry via
+            // Task Manager's Startup tab, and the menu must reflect that.
+            startWithWindowsItem.Checked = StartupRegistration.IsEnabled();
+
             toDrillsItem.Visible = _engine.Mode != EngineMode.ProxyDrills;
             toIteesItem.Visible = _engine.Mode != EngineMode.ProxyInfiniteTees;
             toWatchDrillsItem.Visible = _engine.Mode != EngineMode.FolderWatcherDrills;
@@ -155,6 +167,24 @@ public class TrayApplicationContext : ApplicationContext
         };
 
         return menu;
+    }
+
+    private void ToggleStartWithWindows(ToolStripMenuItem item)
+    {
+        var desired = !StartupRegistration.IsEnabled();
+        if (StartupRegistration.SetEnabled(desired, _engine.RaiseLog))
+        {
+            item.Checked = desired;
+        }
+        else
+        {
+            // Registry write failed (policy, permissions) — reflect reality, and the
+            // reason is already in the log window.
+            item.Checked = StartupRegistration.IsEnabled();
+            MessageBox.Show(
+                "Could not change the Windows startup setting. See the log window for details.",
+                "VX Connector", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 
     private void SwitchEngineMode(EngineMode mode)

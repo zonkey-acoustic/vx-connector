@@ -682,6 +682,12 @@ public class ProxyEngine : IDisposable
         }
     }
 
+    /// <summary>
+    /// Write a message to the log window from outside the engine (e.g. the tray menu).
+    /// Events can only be raised by their declaring type, so callers route through here.
+    /// </summary>
+    public void RaiseLog(string message) => Emit(message);
+
     private void Emit(string msg) =>
         Log?.Invoke($"[{DateTime.Now:HH:mm:ss.fff}] {msg}");
 

@@ -53,9 +53,18 @@ Hover the tray icon for the current sim target and port. Double-click to open th
 - **Switch to Drills** — forward shots to Drills (default port 921)
 - **Switch to Infinite Tees** — forward shots to Infinite Tees (default port 999)
 - **Legacy (pre-beta ProTee Labs)** — the old folder-watcher modes
+- **Start with Windows** — launch VX Connector automatically at login
 - **Quit** — exit VX Connector
 
 The currently-active mode is hidden from the switcher list. Your choice is remembered across launches.
+
+### Start with Windows
+
+Ticking **Start with Windows** makes VX Connector launch at login so it's always ready. It adds a per-user entry under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` — no admin rights needed, and unticking removes it.
+
+The startup entry doesn't pin a mode, so VX Connector uses your saved sim choice at login just as it would on a normal launch. If you move or reinstall `vx-connector.exe`, the entry points at the old location — re-tick the option to point it at the new one.
+
+You can also turn this off from Task Manager's **Startup apps** tab; the tray menu reads the real registry state each time it opens, so it stays accurate either way.
 
 VX Connector also enforces single-instance: launching it again will kill any prior instance running from the same binary path.
 

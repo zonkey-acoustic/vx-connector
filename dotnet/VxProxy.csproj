@@ -10,9 +10,9 @@
     <ApplicationIcon Condition="Exists('vx-proxy.ico')">vx-proxy.ico</ApplicationIcon>
     <Product>VX Connector</Product>
     <AssemblyTitle>VX Connector</AssemblyTitle>
-    <Version>1.4.0</Version>
-    <FileVersion>1.4.0</FileVersion>
-    <InformationalVersion>1.4.0</InformationalVersion>
+    <Version>1.4.1</Version>
+    <FileVersion>1.4.1</FileVersion>
+    <InformationalVersion>1.4.1</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Copyright>Copyright © 2026</Copyright>
     <Company></Company>
