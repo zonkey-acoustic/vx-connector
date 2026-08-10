@@ -1,0 +1,94 @@
+name: Release
+
+# Push a v* tag to cut a release. Manual runs build the same artifact but stop
+# short of publishing, so the pipeline can be exercised without minting a release.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # WinForms + a win-x64 self-contained single file: has to be a Windows runner.
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # The version is shown in the window title, tray menu and log banner, so a tag
+      # that disagrees with the csproj would ship a binary that misreports itself.
+      # Fail loudly rather than publish a mislabelled exe.
+      - name: Resolve and verify version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          csproj=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' dotnet/VxProxy.csproj | head -1)
+          if [ -z "$csproj" ]; then
+            echo "::error::Could not read <Version> from dotnet/VxProxy.csproj"
+            exit 1
+          fi
+          echo "csproj version: $csproj"
+
+          if [ "${GITHUB_REF:-}" != "${GITHUB_REF#refs/tags/}" ]; then
+            tag="${GITHUB_REF#refs/tags/}"
+            echo "tag: $tag"
+            if [ "$tag" != "v$csproj" ]; then
+              echo "::error::Tag $tag does not match <Version>$csproj</Version> in dotnet/VxProxy.csproj."
+              echo "::error::Bump Version/FileVersion/InformationalVersion to ${tag#v}, commit, then re-tag."
+              exit 1
+            fi
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          fi
+
+      # PublishSingleFile, SelfContained and RuntimeIdentifier all come from the
+      # csproj, so this needs no extra flags to match a local `dotnet publish -c Release`.
+      - name: Publish
+        run: dotnet publish dotnet/VxProxy.csproj -c Release -o publish
+
+      - name: Checksum
+        shell: pwsh
+        run: |
+          $exe = 'publish/vx-connector.exe'
+          if (-not (Test-Path $exe)) { throw "Expected $exe to exist after publish" }
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  vx-connector.exe" | Out-File -Encoding ascii publish/vx-connector.exe.sha256
+          Get-Content publish/vx-connector.exe.sha256
+          '{0:N1} MB' -f ((Get-Item $exe).Length / 1MB)
+
+      # Manual run: keep the build for inspection, publish nothing.
+      - name: Upload build artifact
+        if: steps.version.outputs.tag == ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: vx-connector
+          path: |
+            publish/vx-connector.exe
+            publish/vx-connector.exe.sha256
+
+      # Tagged run: create the release, or re-upload assets if a re-run finds it
+      # already there (so a failed publish step can be retried safely).
+      - name: Publish release
+        if: steps.version.outputs.tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag='${{ steps.version.outputs.tag }}'
+          assets="publish/vx-connector.exe publish/vx-connector.exe.sha256"
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists — replacing assets."
+            gh release upload "$tag" $assets --clobber
+          else
+            gh release create "$tag" $assets --title "$tag" --generate-notes
+          fi

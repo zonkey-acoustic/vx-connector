@@ -17,7 +17,7 @@ public class MainForm : Form
         _engine = engine;
         _detectedSim = detectedSim;
 
-        Text = "VX Connector";
+        Text = $"VX Connector {AppVersion.Display}";
         Icon = CreateGolfBallIcon();
         Size = new Size(750, 500);
         MinimumSize = new Size(500, 300);
@@ -126,7 +126,8 @@ public class MainForm : Form
 
         _engine.ConnectionStateChanged += _ =>
         {
-            // Status text depends on IsConnected; just re-render with the current Status.
+            // Fires for either half of the relay (IsConnected / IsUpstreamConnected);
+            // the visuals read both, so just re-render with the current Status.
             if (InvokeRequired)
                 BeginInvoke(() => RefreshStatus(_engine.Status));
             else
@@ -217,17 +218,35 @@ public class MainForm : Form
     }
 
     /// <summary>
-    /// Status for both forwarding modes. The dot tracks the downstream sim
-    /// connection; the legacy folder-watcher mode is called out by name so it's
+    /// Status for both forwarding modes.
+    ///
+    /// Proxy mode needs both halves of the relay before anything can flow — ProTee Labs
+    /// on our :12321 listener and the sim on the far side — so the dot goes green only
+    /// when both are up, matching the tray icon. Folder Watcher has no upstream socket,
+    /// so there the dot tracks the sim alone; that mode is called out by name so it's
     /// obvious when you're on the path that no longer works with the PTL beta.
     /// </summary>
     private (Color color, string text) ForwardingStatusVisuals()
     {
         var (sim, port) = _engine.ResolveForwardTarget();
-        var suffix = _engine.FolderWatcherMode ? " (legacy folder watcher)" : "";
-        return _engine.IsConnected
-            ? (Color.FromArgb(76, 175, 80), $"Connected to {sim} on port {port}{suffix}")        // green
-            : (Color.FromArgb(255, 152, 0), $"Disconnected from {sim} on port {port}{suffix}");  // amber
+        var green = Color.FromArgb(76, 175, 80);
+        var amber = Color.FromArgb(255, 152, 0);
+
+        if (_engine.FolderWatcherMode)
+        {
+            const string suffix = " (legacy folder watcher)";
+            return _engine.IsConnected
+                ? (green, $"Connected to {sim} on port {port}{suffix}")
+                : (amber, $"Disconnected from {sim} on port {port}{suffix}");
+        }
+
+        return (_engine.IsUpstreamConnected, _engine.IsConnected) switch
+        {
+            (true, true) => (green, $"Connected — ProTee Labs and {sim} on port {port}"),
+            (true, false) => (amber, $"Waiting for {sim} on port {port}"),
+            (false, true) => (amber, $"Connected to {sim} on port {port} — waiting for ProTee Labs"),
+            _ => (amber, $"Waiting for ProTee Labs and {sim} on port {port}"),
+        };
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)

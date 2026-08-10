@@ -58,6 +58,12 @@ public class ProxyEngine : IDisposable
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly SemaphoreSlim _connectLock = new(1, 1);
 
+    // Background supervisor that re-establishes the persistent connection. Without it
+    // the only reconnect trigger is an inbound message, so starting before the sim
+    // left us disconnected until a shot arrived.
+    private Task? _reconnectTask;
+    private bool _connectFailureLogged;
+
     public int ShotCount { get; private set; }
     public bool IsRunning { get; private set; }
 
@@ -100,6 +106,25 @@ public class ProxyEngine : IDisposable
         }
     }
 
+    private bool _isUpstreamConnected;
+    /// <summary>
+    /// True when ProTee Labs is connected to our :12321 listener. Proxy modes only —
+    /// Folder Watcher has no upstream socket, and Direct mode has no listener at all.
+    ///
+    /// Paired with <see cref="IsConnected"/> this gives the full picture: the relay only
+    /// carries shots when both halves are up, which is what the tray icon reflects.
+    /// </summary>
+    public bool IsUpstreamConnected
+    {
+        get => _isUpstreamConnected;
+        private set
+        {
+            if (_isUpstreamConnected == value) return;
+            _isUpstreamConnected = value;
+            ConnectionStateChanged?.Invoke(value);
+        }
+    }
+
     public ConnectionStatus Status =>
         !IsRunning ? ConnectionStatus.Stopped :
         Mode == EngineMode.Direct ? ConnectionStatus.Direct :
@@ -111,6 +136,10 @@ public class ProxyEngine : IDisposable
         if (IsRunning) return true;
 
         _cts = new CancellationTokenSource();
+        _connectFailureLogged = false;
+
+        // Banner first, so any log a user sends us identifies the build it came from.
+        Emit($"VX Connector {AppVersion.Display}");
 
         if (ProxyMode)
         {
@@ -134,9 +163,12 @@ public class ProxyEngine : IDisposable
             _listener.Error += Emit;
             _listener.MessageReceived += json => _ = HandleUpstreamMessageAsync(json, _cts.Token);
             _listener.UpstreamConnectionChanged += connected =>
+            {
+                IsUpstreamConnected = connected;
                 Emit(connected
                     ? "ProTee Labs is connected — waiting for shots."
                     : "ProTee Labs disconnected.");
+            };
 
             if (!_listener.Start())
             {
@@ -153,8 +185,10 @@ public class ProxyEngine : IDisposable
             OnStatusChanged();
 
             // Connect to the sim up front so its UI shows us as connected from the
-            // moment we start, not just on the first shot.
+            // moment we start, not just on the first shot. The supervisor then keeps
+            // retrying, so starting before the sim is up recovers without a restart.
             _ = TryConnectAsync(_cts.Token);
+            _reconnectTask = Task.Run(() => ReconnectLoopAsync(_cts.Token), _cts.Token);
             return true;
         }
 
@@ -181,7 +215,9 @@ public class ProxyEngine : IDisposable
 
             // Best-effort initial connect so the sim sees us as connected from
             // the moment we enter Folder Watcher mode, not just on first shot.
+            // The supervisor keeps retrying if the sim isn't up yet.
             _ = TryConnectAsync(_cts.Token);
+            _reconnectTask = Task.Run(() => ReconnectLoopAsync(_cts.Token), _cts.Token);
             return true;
         }
 
@@ -222,8 +258,10 @@ public class ProxyEngine : IDisposable
         // Disposing the connection forces any in-flight ReadAsync to unblock
         // (cancellation doesn't propagate cleanly through socket reads on Windows).
         DisposeConnection();
+        IsUpstreamConnected = false;
         _cts?.Dispose();
         _cts = null;
+        _reconnectTask = null;
         IsRunning = false;
         OnStatusChanged();
     }
@@ -400,19 +438,25 @@ public class ProxyEngine : IDisposable
             }
             catch (SocketException sex)
             {
-                Emit($"Cannot reach {sim} on port {port}: {sex.SocketErrorCode} ({sex.Message})");
+                EmitConnectFailure($"Cannot reach {sim} on port {port}: {sex.SocketErrorCode} ({sex.Message})");
                 client.Dispose();
                 return false;
             }
             catch (OperationCanceledException) when (connectTimeout.IsCancellationRequested)
             {
-                Emit($"Cannot reach {sim} on port {port}: connect timed out after 5s");
+                EmitConnectFailure($"Cannot reach {sim} on port {port}: connect timed out after 5s");
+                client.Dispose();
+                return false;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // Engine is stopping — not a connect failure worth reporting.
                 client.Dispose();
                 return false;
             }
             catch (Exception ex)
             {
-                Emit($"Cannot reach {sim} on port {port}: {ex.Message}");
+                EmitConnectFailure($"Cannot reach {sim} on port {port}: {ex.Message}");
                 client.Dispose();
                 return false;
             }
@@ -420,6 +464,7 @@ public class ProxyEngine : IDisposable
             _persistentClient = client;
             _persistentStream = client.GetStream();
             IsConnected = true;
+            _connectFailureLogged = false;
             Emit($"Connected to {sim} on :{port} (persistent).");
 
             // Background reader; captured stream so it survives field swaps.
@@ -431,6 +476,56 @@ public class ProxyEngine : IDisposable
         {
             _connectLock.Release();
         }
+    }
+
+    /// <summary>
+    /// Keep the persistent connection to the sim established for as long as we run.
+    ///
+    /// The connection is opened once at Start, but before this loop existed a sim
+    /// launched *after* us was never picked up: the only other reconnect trigger is an
+    /// inbound message, so the sim stayed disconnected until a shot arrived and the
+    /// user had to stop and restart VX Connector. Infinite Tees compounds it — it
+    /// binds :999 only on entering a round or practice range, so "the sim is running"
+    /// is not the same thing as "the port is open".
+    ///
+    /// Retries stay fast for the first few attempts so a sim opened moments later is
+    /// picked up promptly, then back off so a genuinely absent sim stays cheap.
+    /// </summary>
+    private async Task ReconnectLoopAsync(CancellationToken ct)
+    {
+        int[] delaysMs = { 2000, 2000, 3000, 5000, 5000, 10000 };
+        int streak = 0;
+
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(delaysMs[Math.Min(streak, delaysMs.Length - 1)], ct);
+
+                if (_persistentStream is not null && _persistentClient?.Connected == true)
+                {
+                    streak = 0;   // healthy — the next outage starts at the fast cadence
+                    continue;
+                }
+
+                streak = await TryConnectAsync(ct) ? 0 : streak + 1;
+            }
+            catch (OperationCanceledException) { return; }
+            catch (ObjectDisposedException) { return; }   // Stop() disposed the CTS mid-wait
+        }
+    }
+
+    /// <summary>
+    /// Report a failed connect once per outage. The reconnect loop retries every few
+    /// seconds, so emitting every failure would bury everything else in the log.
+    /// Reset when a connect succeeds, so the next outage reports again.
+    /// </summary>
+    private void EmitConnectFailure(string message)
+    {
+        if (_connectFailureLogged) return;
+        _connectFailureLogged = true;
+        Emit(message);
+        Emit("  Retrying in the background — no need to restart.");
     }
 
     private async Task<bool> TryWriteAsync(byte[] bytes, CancellationToken ct)

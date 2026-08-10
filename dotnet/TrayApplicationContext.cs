@@ -27,6 +27,12 @@ public class TrayApplicationContext : ApplicationContext
         _tray.DoubleClick += (_, _) => ShowForm();
 
         _engine.StatusChanged += OnStatusChanged;
+
+        // Either half of the relay changing state has to repaint the icon. The
+        // mode-level ConnectionStatus doesn't change with it, so force the refresh
+        // past the early-out in ApplyStatus.
+        _engine.ConnectionStateChanged += _ => ApplyStatus(_engine.Status, forceRefresh: true);
+
         _engine.Start();
 
         // Defensive: ensure the tray reflects the actual engine status, even if
@@ -45,8 +51,13 @@ public class TrayApplicationContext : ApplicationContext
         {
             ConnectionStatus.Direct =>
                 (Color.FromArgb(33, 150, 243), DirectStatusText()),
+            // Green only when the relay is actually complete end to end: ProTee Labs
+            // on our listener AND the sim on the far side. Purple means the proxy is
+            // up but one half is still missing, so nothing would flow yet.
             ConnectionStatus.Proxy =>
-                (Color.FromArgb(156, 39, 176), ForwardingStatusText("Proxy")),
+                (_engine.IsUpstreamConnected && _engine.IsConnected
+                    ? Color.FromArgb(76, 175, 80)
+                    : Color.FromArgb(156, 39, 176), ProxyStatusText()),
             ConnectionStatus.FolderWatcher =>
                 (Color.FromArgb(0, 150, 136), ForwardingStatusText("Legacy")),
             _ =>
@@ -89,6 +100,25 @@ public class TrayApplicationContext : ApplicationContext
     }
 
     /// <summary>
+    /// Proxy tooltip. The icon colour says "complete or not"; the tooltip has to say
+    /// *which* half is missing, since "running but nothing arrives" is the state
+    /// people actually need to debug.
+    /// </summary>
+    private string ProxyStatusText()
+    {
+        var (sim, port) = _engine.ResolveForwardTarget();
+        var baseText = $"VX Connector — Proxy → {sim} :{port}";
+
+        return (_engine.IsUpstreamConnected, _engine.IsConnected) switch
+        {
+            (true, true) => $"{baseText} (connected)",
+            (true, false) => $"{baseText} (waiting for {sim})",
+            (false, true) => $"{baseText} (waiting for ProTee Labs)",
+            _ => $"{baseText} (waiting for ProTee Labs and {sim})",
+        };
+    }
+
+    /// <summary>
     /// Generate a 32x32 icon: dark circle background, colored inner circle, "VX" text.
     /// </summary>
     private static Icon CreateIcon(Color fill)
@@ -118,6 +148,11 @@ public class TrayApplicationContext : ApplicationContext
     private ContextMenuStrip BuildMenu()
     {
         var menu = new ContextMenuStrip();
+        // Inert header — the tray menu is the only UI a user sees when the log
+        // window is closed, so the version needs to be readable from here too.
+        menu.Items.Add(new ToolStripMenuItem($"VX Connector {AppVersion.Display}") { Enabled = false });
+        menu.Items.Add(new ToolStripSeparator());
+
         menu.Items.Add("Show Log", null, (_, _) => ShowForm());
         menu.Items.Add(new ToolStripSeparator());
 
