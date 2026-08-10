@@ -191,7 +191,7 @@ public class MainForm : Form
             return Color.FromArgb(206, 145, 120);   // orange
         if (line.Contains("Error") || line.Contains("error"))
             return Color.FromArgb(244, 71, 71);     // red
-        if (line.Contains("Status") || line.Contains("Ready"))
+        if (line.Contains("Status") || line.Contains("Ready") || line.Contains("Update available"))
             return Color.FromArgb(156, 220, 254);   // blue
         return Color.FromArgb(212, 212, 212);        // default gray
     }

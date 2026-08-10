@@ -48,21 +48,52 @@ jobs:
             fi
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
           fi
+          echo "csproj=$csproj" >> "$GITHUB_OUTPUT"
 
       # PublishSingleFile, SelfContained and RuntimeIdentifier all come from the
       # csproj, so this needs no extra flags to match a local `dotnet publish -c Release`.
       - name: Publish
         run: dotnet publish dotnet/VxProxy.csproj -c Release -o publish
 
+      # Per-user Inno installer wrapping the same exe. ISCC ships on the windows-latest
+      # image; install it if a future image drops it rather than failing the release.
+      - name: Build installer
+        shell: pwsh
+        run: |
+          function Find-ISCC {
+            # Inno Setup 7 exists now, and the runner image has moved versions before.
+            # Take whatever ISCC is present rather than pinning one install path.
+            Get-ChildItem -Path "${env:ProgramFiles(x86)}", "$env:ProgramFiles" `
+                          -Filter ISCC.exe -Depth 2 -ErrorAction SilentlyContinue |
+              Select-Object -First 1 -ExpandProperty FullName
+          }
+          $iscc = Find-ISCC
+          if (-not $iscc) {
+            Write-Host "ISCC not found on the image — installing Inno Setup."
+            choco install innosetup -y --no-progress
+            $iscc = Find-ISCC
+          }
+          if (-not $iscc) { throw "Inno Setup compiler (ISCC.exe) unavailable" }
+          Write-Host "Using $iscc"
+          New-Item -ItemType Directory -Force installer/payload | Out-Null
+          Copy-Item publish/vx-connector.exe installer/payload/ -Force
+          & $iscc "/DMyAppVersion=${{ steps.version.outputs.csproj }}" installer/vx-connector.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+
       - name: Checksum
         shell: pwsh
         run: |
-          $exe = 'publish/vx-connector.exe'
-          if (-not (Test-Path $exe)) { throw "Expected $exe to exist after publish" }
-          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
-          "$hash  vx-connector.exe" | Out-File -Encoding ascii publish/vx-connector.exe.sha256
-          Get-Content publish/vx-connector.exe.sha256
-          '{0:N1} MB' -f ((Get-Item $exe).Length / 1MB)
+          $targets = @(
+            @{ Path = 'publish/vx-connector.exe';    Name = 'vx-connector.exe' },
+            @{ Path = 'dist/VxConnectorSetup.exe';   Name = 'VxConnectorSetup.exe' }
+          )
+          foreach ($t in $targets) {
+            if (-not (Test-Path $t.Path)) { throw "Expected $($t.Path) to exist" }
+            $hash = (Get-FileHash $t.Path -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($t.Name)" | Out-File -Encoding ascii "$($t.Path).sha256"
+            Get-Content "$($t.Path).sha256"
+            '{0} — {1:N1} MB' -f $t.Name, ((Get-Item $t.Path).Length / 1MB)
+          }
 
       # Manual run: keep the build for inspection, publish nothing.
       - name: Upload build artifact
@@ -73,6 +104,8 @@ jobs:
           path: |
             publish/vx-connector.exe
             publish/vx-connector.exe.sha256
+            dist/VxConnectorSetup.exe
+            dist/VxConnectorSetup.exe.sha256
 
       # Tagged run: create the release, or re-upload assets if a re-run finds it
       # already there (so a failed publish step can be retried safely).
@@ -84,7 +117,10 @@ jobs:
         run: |
           set -euo pipefail
           tag='${{ steps.version.outputs.tag }}'
+          # Asset names are load-bearing: the in-app updater resolves vx-connector.exe
+          # and vx-connector.exe.sha256 out of the release by name.
           assets="publish/vx-connector.exe publish/vx-connector.exe.sha256"
+          assets="$assets dist/VxConnectorSetup.exe dist/VxConnectorSetup.exe.sha256"
 
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "Release $tag already exists — replacing assets."

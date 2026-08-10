@@ -10,9 +10,9 @@
     <ApplicationIcon Condition="Exists('vx-proxy.ico')">vx-proxy.ico</ApplicationIcon>
     <Product>VX Connector</Product>
     <AssemblyTitle>VX Connector</AssemblyTitle>
-    <Version>1.4.2</Version>
-    <FileVersion>1.4.2</FileVersion>
-    <InformationalVersion>1.4.2</InformationalVersion>
+    <Version>1.5.0</Version>
+    <FileVersion>1.5.0</FileVersion>
+    <InformationalVersion>1.5.0</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Copyright>Copyright © 2026</Copyright>
     <Company></Company>
@@ -20,5 +20,14 @@
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!--
+      Roughly halves the exe (~154 MB to ~78 MB). Worth the small decompression cost at
+      process start because it halves both the first download and every auto-update
+      download the app pulls from GitHub. Note the GSPconnect stub is a second launch of
+      this same binary, so the cost is paid twice per session.
+
+      PublishTrimmed is deliberately absent: trimming is unsupported for WinForms.
+    -->
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
 </Project>

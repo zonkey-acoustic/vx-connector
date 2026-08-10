@@ -25,6 +25,10 @@ static class Program
 
         KillOlderInstances();
 
+        // Only safe once the previous instance is gone: a self-update leaves the old exe
+        // renamed aside, and it stays locked while that process lives.
+        UpdateApplier.CleanUpLeftovers();
+
         ApplicationConfiguration.Initialize();
 
         // Startup mode resolution: explicit CLI flag wins; otherwise fall back
@@ -79,6 +83,22 @@ static class Program
         }
         return null;
     }
+
+    /// <summary>
+    /// The flag that reproduces <paramref name="mode"/> on a fresh launch — the inverse of
+    /// <see cref="ParseStartupModeFromArgs"/>. Used when relaunching ourselves after a
+    /// self-update, so a session started from a flag doesn't quietly revert to the saved
+    /// preference. Returns null if the mode has no flag.
+    /// </summary>
+    internal static string? CliFlagFor(EngineMode mode) => mode switch
+    {
+        EngineMode.Direct => "--direct",
+        EngineMode.ProxyDrills => "--proxy-drills",
+        EngineMode.ProxyInfiniteTees => "--proxy-itees",
+        EngineMode.FolderWatcherDrills => "--watch-drills",
+        EngineMode.FolderWatcherInfiniteTees => "--watch-itees",
+        _ => null,
+    };
 
     /// <summary>
     /// Kill any other VX Connector instances (running our exact same binary path),
