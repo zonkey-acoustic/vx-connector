@@ -32,6 +32,11 @@ public class OpenConnectListener : IDisposable
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private bool _disposed;
 
+    // Reported when the upstream connection ends. ProTee Labs going quiet is what lets
+    // the sim's idle timer run, so the gap before a drop is the first thing to check
+    // when the relay falls over between holes.
+    private DateTime _lastUpstreamActivityUtc;
+
     public int Port => _port;
     public bool IsRunning { get; private set; }
 
@@ -113,10 +118,19 @@ public class OpenConnectListener : IDisposable
             // connection always wins.
             DropClient();
 
+            // Each relayed object should reach PTL as its own segment: it closed the
+            // connection 4ms after receiving two batched objects in one write
+            // (2026-08-16). ProxyEngine spaces them; NoDelay stops the stack recombining
+            // them on the way out.
+            client.NoDelay = true;
+
             _client = client;
             _stream = client.GetStream();
-            UpstreamConnectionChanged?.Invoke(true);
+
+            // Logged before the event: the handler emits its own lines, and firing first
+            // put "ProTee Labs connected." underneath them in the log window.
             Log?.Invoke("ProTee Labs connected.");
+            UpstreamConnectionChanged?.Invoke(true);
 
             var streamRef = _stream;
             _ = Task.Run(() => ReadLoopAsync(streamRef, ct), ct);
@@ -127,6 +141,7 @@ public class OpenConnectListener : IDisposable
     {
         var buf = new byte[16384];
         var framer = new JsonObjectFramer(MaxMessageBytes);
+        _lastUpstreamActivityUtc = DateTime.UtcNow;
 
         try
         {
@@ -143,19 +158,20 @@ public class OpenConnectListener : IDisposable
                 {
                     var inner = ex.InnerException as SocketException;
                     Log?.Invoke(inner is not null
-                        ? $"ProTee Labs connection error: {inner.SocketErrorCode}"
-                        : $"ProTee Labs connection error: {ex.Message}");
+                        ? $"ProTee Labs connection error: {inner.SocketErrorCode}{IdleSuffix()}"
+                        : $"ProTee Labs connection error: {ex.Message}{IdleSuffix()}");
                     InvalidateIfCurrent(stream);
                     return;
                 }
 
                 if (read == 0)
                 {
-                    Log?.Invoke("ProTee Labs disconnected.");
+                    Log?.Invoke($"ProTee Labs disconnected.{IdleSuffix()}");
                     InvalidateIfCurrent(stream);
                     return;
                 }
 
+                _lastUpstreamActivityUtc = DateTime.UtcNow;
                 foreach (var message in framer.Consume(buf, read))
                 {
                     MessageReceived?.Invoke(message);
@@ -196,6 +212,12 @@ public class OpenConnectListener : IDisposable
             _sendLock.Release();
         }
     }
+
+    /// <summary>How long ProTee Labs had sent nothing before the connection ended.</summary>
+    private string IdleSuffix() =>
+        _lastUpstreamActivityUtc == default
+            ? string.Empty
+            : $" (silent for {(DateTime.UtcNow - _lastUpstreamActivityUtc).TotalSeconds:F1}s)";
 
     private void InvalidateIfCurrent(NetworkStream stream)
     {

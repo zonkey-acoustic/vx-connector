@@ -18,7 +18,7 @@ public class MainForm : Form
         _detectedSim = detectedSim;
 
         Text = $"VX Connector {AppVersion.Display}";
-        Icon = CreateGolfBallIcon();
+        Icon = LoadAppIcon();
         Size = new Size(750, 500);
         MinimumSize = new Size(500, 300);
         BackColor = Color.FromArgb(30, 30, 30);
@@ -240,12 +240,13 @@ public class MainForm : Form
                 : (amber, $"Disconnected from {sim} on port {port}{suffix}");
         }
 
+        // With ProTee Labs away the sim link is closed on purpose, so there is no
+        // "connected to the sim but waiting for PTL" state left to report.
         return (_engine.IsUpstreamConnected, _engine.IsConnected) switch
         {
             (true, true) => (green, $"Connected — ProTee Labs and {sim} on port {port}"),
             (true, false) => (amber, $"Waiting for {sim} on port {port}"),
-            (false, true) => (amber, $"Connected to {sim} on port {port} — waiting for ProTee Labs"),
-            _ => (amber, $"Waiting for ProTee Labs and {sim} on port {port}"),
+            _ => (amber, $"Waiting for ProTee Labs — {sim} link closed until it connects"),
         };
     }
 
@@ -259,36 +260,21 @@ public class MainForm : Form
         }
     }
 
-    private static Icon CreateGolfBallIcon()
+    /// <summary>
+    /// The window icon is the same vx-connector.ico the exe carries as its shell icon,
+    /// so the title bar, alt-tab and Explorer all show one thing. Read from the managed
+    /// resource rather than drawn at runtime: the .ico carries per-size artwork (the
+    /// 16px frame drops most of the dimples, which is the only way it reads at that
+    /// scale), and a single 48px bitmap scaled down cannot.
+    /// </summary>
+    private static Icon LoadAppIcon()
     {
-        using var bmp = new Bitmap(48, 48);
-        using var g = Graphics.FromImage(bmp);
-        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-        g.Clear(Color.Transparent);
+        var stream = typeof(MainForm).Assembly.GetManifestResourceStream("vx-connector.ico");
+        // Falling back rather than throwing: a missing icon is cosmetic, and the build
+        // would have to have dropped the EmbeddedResource for it to happen at all.
+        if (stream is null) return SystemIcons.Application;
 
-        // Golf ball — white circle with subtle shading
-        using var ballBrush = new System.Drawing.Drawing2D.LinearGradientBrush(
-            new Rectangle(4, 4, 40, 40),
-            Color.FromArgb(250, 250, 250),
-            Color.FromArgb(200, 200, 200),
-            45f);
-        g.FillEllipse(ballBrush, 4, 4, 40, 40);
-
-        // Dimples — small circles scattered on the ball
-        using var dimpleBrush = new SolidBrush(Color.FromArgb(50, 120, 120, 120));
-        int[][] dimples =
-        [
-            [16, 12, 5], [28, 14, 5], [12, 22, 5], [24, 24, 6],
-            [18, 32, 5], [32, 28, 4], [10, 32, 4], [28, 36, 4],
-            [20, 20, 4], [34, 20, 4], [14, 16, 3], [22, 10, 3],
-        ];
-        foreach (var d in dimples)
-            g.FillEllipse(dimpleBrush, d[0], d[1], d[2], d[2]);
-
-        // Thin outline
-        using var outlinePen = new Pen(Color.FromArgb(80, 100, 100, 100), 1f);
-        g.DrawEllipse(outlinePen, 4, 4, 40, 40);
-
-        return Icon.FromHandle(bmp.GetHicon());
+        using (stream)
+            return new Icon(stream);
     }
 }

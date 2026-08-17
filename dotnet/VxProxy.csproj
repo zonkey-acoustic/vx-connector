@@ -7,12 +7,18 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>VxProxy</RootNamespace>
     <AssemblyName>vx-connector</AssemblyName>
-    <ApplicationIcon Condition="Exists('vx-proxy.ico')">vx-proxy.ico</ApplicationIcon>
+    <!--
+      Unconditional on purpose. The old form was Condition="Exists('vx-proxy.ico')"
+      against a file that was never in the repo, so the exe silently shipped the stock
+      .NET icon for every release. A missing icon should break the build instead.
+      Regenerate with tools/generate-icon.ps1.
+    -->
+    <ApplicationIcon>vx-connector.ico</ApplicationIcon>
     <Product>VX Connector</Product>
     <AssemblyTitle>VX Connector</AssemblyTitle>
-    <Version>1.5.0</Version>
-    <FileVersion>1.5.0</FileVersion>
-    <InformationalVersion>1.5.0</InformationalVersion>
+    <Version>1.5.2</Version>
+    <FileVersion>1.5.2</FileVersion>
+    <InformationalVersion>1.5.2</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Copyright>Copyright © 2026</Copyright>
     <Company></Company>
@@ -30,4 +36,15 @@
     -->
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Also embedded as a managed resource so MainForm can show the same icon in its
+      title bar and alt-tab entry. ApplicationIcon alone only reaches the shell: it
+      becomes a Win32 resource on the exe, which a single-file app can't reopen from
+      disk, and ExtractAssociatedIcon would hand back one size instead of the set.
+      LogicalName pins the lookup key so a namespace change can't break it.
+    -->
+    <EmbeddedResource Include="vx-connector.ico" LogicalName="vx-connector.ico" />
+  </ItemGroup>
 </Project>

@@ -49,9 +49,11 @@ public class ProxyEngine : IDisposable
     private OpenConnectListener? _listener;
     private int _watcherShotNumber;
 
-    // Persistent TCP connection to the sim (Folder Watcher mode). Held for the
-    // lifetime of a session so the sim's UI sees us as continuously connected,
-    // matching the OpenConnect spec's "constant 2-way communication" intent.
+    // Persistent TCP connection to the sim. Held across shots so the sim's UI sees us as
+    // continuously connected, matching the OpenConnect spec's "constant 2-way
+    // communication" intent. Held for the whole session in Folder Watcher mode; in Proxy
+    // mode only while ProTee Labs is connected, since the sim's UI reads socket state as
+    // "ready for a shot" and that would be a lie with PTL away.
     private TcpClient? _persistentClient;
     private NetworkStream? _persistentStream;
     private Task? _readerTask;
@@ -63,6 +65,63 @@ public class ProxyEngine : IDisposable
     // left us disconnected until a shot arrived.
     private Task? _reconnectTask;
     private bool _connectFailureLogged;
+
+    // Timestamps that exist purely so a dropped connection reports *why* it dropped.
+    // Infinite Tees carries ClientIdleTimeoutSec=10; an idle-timeout close and a
+    // level-transition reset look identical in the log without the elapsed time, and
+    // they need different fixes. _lastSimActivityUtc covers both directions on the sim
+    // socket (our writes and its acks) because that is what an idle timer would measure.
+    private DateTime _lastSimActivityUtc;
+    private DateTime? _simDownSinceUtc;
+
+    // Set when a ball-data shot goes to the sim, cleared once the ready signal below has
+    // been sent (or the sim sent its own). Written and read from different pool threads.
+    private volatile bool _shotAwaitingReadySignal;
+
+    // Supersedes a scheduled ready signal without cancellation-token churn: every
+    // schedule takes a generation, and only the newest one is allowed to fire.
+    private int _readySignalGeneration;
+
+    // GSPro sends its 202 ~250ms after the last of its two 201s. Infinite Tees's 201s
+    // arrive ~101ms apart, so this comfortably lands after the pair rather than between.
+    private static readonly TimeSpan ReadyAfterPlayerInfo = TimeSpan.FromMilliseconds(400);
+
+    // Only for a sim that announces nothing at all after a shot, and only until we learn
+    // otherwise — see _simAnnouncesPlayerInfo. Infinite Tees's 201 latency is variable
+    // (8.6s and ~19s on consecutive shots, observed 2026-08-16), so no fixed timeout can
+    // both cover a silent sim and stay out of the way of a slow one.
+    private static readonly TimeSpan ReadyFallback = TimeSpan.FromSeconds(15);
+
+    // Spacing between consecutive objects relayed upstream in one batch, so PTL's next
+    // read cannot return two. The real GSPconnect's 201 pair is 256ms apart.
+    private static readonly TimeSpan UpstreamObjectGap = TimeSpan.FromMilliseconds(60);
+
+    // Set the first time the sim sends a Code 201. From then on it is trusted to announce
+    // its own ready moment and the blind fallback is retired: firing it would pre-empt the
+    // real signal with one at the wrong time, which is what happened to shot #5 above.
+    private volatile bool _simAnnouncesPlayerInfo;
+
+    /// <summary>Guards against a malformed sim stream growing the frame buffer without bound.</summary>
+    private const int MaxSimResponseBytes = 1024 * 1024;
+
+    /// <summary>
+    /// "The game is ready for the next shot" — byte-for-byte what the licensed
+    /// GSPconnect sends ProTee Labs once a shot has resolved (`samples/protee-gspro.pcapng`,
+    /// t=29.4 / 102.6 / 123.4, each ~10s after a shot sequence). No trailing newline:
+    /// GSPconnect doesn't send one on this lane, so neither do we.
+    ///
+    /// Neither sim produces anything like it — Infinite Tees and Drills only ack with
+    /// Code 200 — so without this PTL never hears the game come back to ready. That is
+    /// the one substantive difference between what PTL gets from us and what it gets
+    /// from the real GSPconnect.
+    ///
+    /// We deliberately do **not** synthesize the `Code 201` player-information message
+    /// GSPro pairs with this. 201 carries Handed/Club/DistanceToTarget, we have no source
+    /// for any of it, and PTL acts on club information — inventing it would be worse than
+    /// staying quiet. 202 is content-free, so it can only ever be true.
+    /// </summary>
+    private static readonly byte[] ReadyForNextShot =
+        Encoding.UTF8.GetBytes("{\"Code\":202,\"Message\":\"GSPro ready\",\"Player\":null}");
 
     public int ShotCount { get; private set; }
     public bool IsRunning { get; private set; }
@@ -93,7 +152,9 @@ public class ProxyEngine : IDisposable
     private bool _isConnected;
     /// <summary>
     /// True when the persistent TCP connection to the sim is currently established.
-    /// Only meaningful in Folder Watcher modes; always false in Direct mode and when stopped.
+    /// Always false in Direct mode and when stopped. In Proxy mode it also goes false
+    /// whenever ProTee Labs is away — the link is closed on purpose then, so the sim
+    /// stops showing ready (see <see cref="OnUpstreamConnectionChanged"/>).
     /// </summary>
     public bool IsConnected
     {
@@ -137,6 +198,8 @@ public class ProxyEngine : IDisposable
 
         _cts = new CancellationTokenSource();
         _connectFailureLogged = false;
+        _lastSimActivityUtc = default;
+        _simDownSinceUtc = null;
 
         // Banner first, so any log a user sends us identifies the build it came from.
         Emit($"VX Connector {AppVersion.Display}");
@@ -162,13 +225,7 @@ public class ProxyEngine : IDisposable
             _listener.Log += Emit;
             _listener.Error += Emit;
             _listener.MessageReceived += json => _ = HandleUpstreamMessageAsync(json, _cts.Token);
-            _listener.UpstreamConnectionChanged += connected =>
-            {
-                IsUpstreamConnected = connected;
-                Emit(connected
-                    ? "ProTee Labs is connected — waiting for shots."
-                    : "ProTee Labs disconnected.");
-            };
+            _listener.UpstreamConnectionChanged += OnUpstreamConnectionChanged;
 
             if (!_listener.Start())
             {
@@ -184,10 +241,10 @@ public class ProxyEngine : IDisposable
             Emit($"Proxy mode — forwarding shots to {proxySim} at {ForwardHost}:{proxyPort}.");
             OnStatusChanged();
 
-            // Connect to the sim up front so its UI shows us as connected from the
-            // moment we start, not just on the first shot. The supervisor then keeps
-            // retrying, so starting before the sim is up recovers without a restart.
-            _ = TryConnectAsync(_cts.Token);
+            // Deliberately no eager connect here, unlike Folder Watcher mode below: in
+            // Proxy mode the sim connection is tied to ProTee Labs's, so it opens when
+            // PTL arrives (OnUpstreamConnectionChanged). The supervisor still starts now
+            // — it idles until PTL is here, then keeps the sim link up from that point.
             _reconnectTask = Task.Run(() => ReconnectLoopAsync(_cts.Token), _cts.Token);
             return true;
         }
@@ -291,7 +348,7 @@ public class ProxyEngine : IDisposable
         try
         {
             var bytes = Encoding.UTF8.GetBytes(json + "\n");
-            LogShotFromUpstream(json);
+            var carriedBallData = LogShotFromUpstream(json);
 
             for (int attempt = 1; attempt <= 2; attempt++)
             {
@@ -301,7 +358,22 @@ public class ProxyEngine : IDisposable
                     continue;
                 }
 
-                if (await TryWriteAsync(bytes, ct)) return;
+                if (await TryWriteAsync(bytes, ct))
+                {
+                    // Arm the ready signal — only for ball data, so the cadence is one per
+                    // shot like GSPro's. The sims ack PTL's status chatter too, and arming
+                    // on that would fire it constantly. See ScheduleReadySignal.
+                    if (carriedBallData)
+                    {
+                        _shotAwaitingReadySignal = true;
+
+                        // Only blind-schedule for a sim we've never heard announce itself.
+                        // Once one has sent a 201 we wait for the real thing however long
+                        // it takes, rather than racing it with a guess.
+                        if (!_simAnnouncesPlayerInfo) ScheduleReadySignal(ReadyFallback, ct);
+                    }
+                    return;
+                }
 
                 if (attempt == 1) Emit("  Reconnecting and retrying...");
             }
@@ -318,7 +390,8 @@ public class ProxyEngine : IDisposable
     /// messages actually carrying ball data count as shots; the status and
     /// heartbeat messages PTL interleaves are relayed but not counted.
     /// </summary>
-    private void LogShotFromUpstream(string json)
+    /// <returns>True if the message carried ball data, i.e. it was the shot itself.</returns>
+    private bool LogShotFromUpstream(string json)
     {
         try
         {
@@ -333,7 +406,7 @@ public class ProxyEngine : IDisposable
                 && options.TryGetProperty("ContainsClubData", out var cc)
                 && cc.ValueKind == JsonValueKind.True;
 
-            if (!hasBall && !hasClub) return;   // status / heartbeat — relayed, not a shot
+            if (!hasBall && !hasClub) return false;   // status / heartbeat — relayed, not a shot
 
             var ball = root.TryGetProperty("BallData", out var b) ? b : default;
             var club = root.TryGetProperty("ClubData", out var c) ? c : default;
@@ -353,16 +426,18 @@ public class ProxyEngine : IDisposable
             if (!hasBall)
             {
                 Emit($"  Club data for #{shotNum}: ClubSpeed={clubSpeed:F1}");
-                return;
+                return false;
             }
 
             Emit($"SHOT #{shotNum} [Proxy] Speed={ballSpeed:F1} Spin={spin:F0} VLA={vla:F1} ClubSpeed={clubSpeed:F1}");
             ShotCount++;
             ShotReceived?.Invoke(new ShotInfo(shotNum, ballSpeed, spin, vla, clubSpeed, hasBall, hasClub));
+            return true;
         }
         catch (JsonException)
         {
             Emit("  Relayed a message that wasn't valid JSON.");
+            return false;
         }
     }
 
@@ -409,6 +484,103 @@ public class ProxyEngine : IDisposable
     }
 
     /// <summary>
+    /// Ties the sim connection's lifetime to ProTee Labs's. Proxy mode only — Folder
+    /// Watcher has no upstream socket and keeps connecting at Start.
+    ///
+    /// Both sims drive their connected/ready UI purely from socket-open state, with no
+    /// app-level liveness check in either direction (see the protocol notes: Infinite
+    /// Tees never sends anything unprompted). Holding our end open while PTL is away
+    /// therefore advertises a relay that cannot deliver: the sim sits at READY, the user
+    /// swings, and nothing happens. Closing our side is the only signal the sim
+    /// understands — and it's readable from where the user is actually standing.
+    ///
+    /// The cost is that the sim briefly shows disconnected whenever PTL reconnects. That
+    /// is the honest reading: until PTL is back, no shot can reach the sim.
+    /// </summary>
+    private void OnUpstreamConnectionChanged(bool connected)
+    {
+        IsUpstreamConnected = connected;
+
+        // Any shot still awaiting its ready signal belonged to the connection that just
+        // ended. Carrying it across would fire a "ready" at a PTL that never sent a shot.
+        ClearPendingReadySignal();
+
+        if (connected)
+        {
+            Emit("ProTee Labs is connected — waiting for shots.");
+
+            // Connect now rather than waiting for the supervisor's next tick, so the sim
+            // is up before the first swing rather than a couple of seconds into it.
+            var cts = _cts;
+            if (cts is null) return;
+            try { _ = TryConnectAsync(cts.Token); }
+            catch (ObjectDisposedException) { }   // Stop() raced us
+            return;
+        }
+
+        // No "ProTee Labs disconnected" line here: the listener already reports the drop,
+        // and with how long PTL had been silent first — which is the diagnostic half.
+        if (_persistentStream is not null)
+        {
+            var (sim, _) = ResolveForwardTarget();
+            Emit($"  Closing the {sim} connection too — leaving it open would keep {sim} " +
+                 "showing ready for shots that can't arrive.");
+        }
+
+        DisposeConnection();
+    }
+
+    /// <summary>
+    /// Schedule the synthesized "ready for the next shot" signal to ProTee Labs,
+    /// superseding any signal already pending for this shot.
+    ///
+    /// Timing is the whole point. The sim acks a shot in about a millisecond, but the
+    /// game is not ready then — it's still resolving the ball flight. Infinite Tees says
+    /// so ~12s later with a pair of Code 201s, which is when GSPro sends its 202. Firing
+    /// on the ack instead would tell PTL "ready" twelve seconds early.
+    ///
+    /// Nothing here fires if the sim sends its own 202 first — see ClearPendingReadySignal.
+    /// </summary>
+    private void ScheduleReadySignal(TimeSpan delay, CancellationToken ct)
+    {
+        var generation = Interlocked.Increment(ref _readySignalGeneration);
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(delay, ct);
+
+                // Superseded by a later 201, a sim-sent 202, a new shot, or a disconnect.
+                if (Volatile.Read(ref _readySignalGeneration) != generation) return;
+                if (!_shotAwaitingReadySignal) return;
+
+                var listener = _listener;
+                if (listener is null) return;
+
+                _shotAwaitingReadySignal = false;
+                if (await listener.SendUpstreamAsync(ReadyForNextShot, ct))
+                    Emit("  → ProTee Labs: [202] GSPro ready (synthesized).");
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException)
+            {
+                // Engine stopping — nothing to report.
+            }
+        }, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Drop any pending ready signal. Called when the sim sends its own Code 202, and
+    /// whenever a connection ends — a shot mid-flight belongs to the session that just
+    /// went away, so announcing "ready" afterwards would be describing nothing.
+    /// </summary>
+    private void ClearPendingReadySignal()
+    {
+        Interlocked.Increment(ref _readySignalGeneration);
+        _shotAwaitingReadySignal = false;
+    }
+
+    /// <summary>
     /// Ensure we have an open persistent connection to the sim. If the existing
     /// one is gone (or never established), connect now. Returns false on failure
     /// so callers can decide whether to retry or drop the shot.
@@ -421,6 +593,11 @@ public class ProxyEngine : IDisposable
 
     private async Task<bool> TryConnectAsync(CancellationToken ct)
     {
+        // Single chokepoint for the "no sim link without ProTee Labs" rule, so a late
+        // in-flight message or a supervisor tick can't quietly re-open what
+        // OnUpstreamConnectionChanged just closed.
+        if (ProxyMode && !IsUpstreamConnected) return false;
+
         await _connectLock.WaitAsync(ct);
         try
         {
@@ -461,11 +638,27 @@ public class ProxyEngine : IDisposable
                 return false;
             }
 
+            // Re-check after the await: connecting can take up to 5s, and if ProTee Labs
+            // left during it, OnUpstreamConnectionChanged has already run and torn down a
+            // connection that didn't exist yet. Publishing this one now would hand the sim
+            // an open socket with nothing left to close it until PTL came back.
+            if (ProxyMode && !IsUpstreamConnected)
+            {
+                client.Dispose();
+                return false;
+            }
+
             _persistentClient = client;
             _persistentStream = client.GetStream();
             IsConnected = true;
             _connectFailureLogged = false;
-            Emit($"Connected to {sim} on :{port} (persistent).");
+            _lastSimActivityUtc = DateTime.UtcNow;
+
+            var downFor = _simDownSinceUtc is { } since
+                ? $" after {(DateTime.UtcNow - since).TotalSeconds:F1}s down"
+                : string.Empty;
+            _simDownSinceUtc = null;
+            Emit($"Connected to {sim} on :{port} (persistent){downFor}.");
 
             // Background reader; captured stream so it survives field swaps.
             var streamRef = _persistentStream;
@@ -479,9 +672,12 @@ public class ProxyEngine : IDisposable
     }
 
     /// <summary>
-    /// Keep the persistent connection to the sim established for as long as we run.
+    /// Keep the persistent connection to the sim established for as long as it *should*
+    /// be up — which in Proxy mode means "while ProTee Labs is connected", not "while we
+    /// are running". See <see cref="OnUpstreamConnectionChanged"/>.
     ///
-    /// The connection is opened once at Start, but before this loop existed a sim
+    /// The connection is opened once at Start (Folder Watcher) or on PTL's arrival
+    /// (Proxy), but before this loop existed a sim
     /// launched *after* us was never picked up: the only other reconnect trigger is an
     /// inbound message, so the sim stayed disconnected until a shot arrived and the
     /// user had to stop and restart VX Connector. Infinite Tees compounds it — it
@@ -501,6 +697,19 @@ public class ProxyEngine : IDisposable
             try
             {
                 await Task.Delay(delaysMs[Math.Min(streak, delaysMs.Length - 1)], ct);
+
+                // In Proxy mode a missing sim link is intentional while ProTee Labs is
+                // away — reconnecting here would put the sim straight back to advertising
+                // ready. Reset the streak so the first attempt after PTL returns is fast.
+                if (ProxyMode && !IsUpstreamConnected)
+                {
+                    // Backstop for any ordering that still slipped a connection through:
+                    // the rule is enforced where the link opens, but this is the one place
+                    // that re-checks it on a timer, so a stale link can't outlive PTL.
+                    if (_persistentStream is not null) DisposeConnection();
+                    streak = 0;
+                    continue;
+                }
 
                 if (_persistentStream is not null && _persistentClient?.Connected == true)
                 {
@@ -538,14 +747,15 @@ public class ProxyEngine : IDisposable
             try
             {
                 await stream.WriteAsync(bytes, ct);
+                _lastSimActivityUtc = DateTime.UtcNow;
                 return true;
             }
             catch (IOException ex)
             {
                 var inner = ex.InnerException as SocketException;
                 Emit(inner is not null
-                    ? $"  Write failed: {inner.SocketErrorCode} ({inner.Message})"
-                    : $"  Write failed: {ex.Message}");
+                    ? $"  Write failed: {inner.SocketErrorCode} ({inner.Message}){IdleSuffix()}"
+                    : $"  Write failed: {ex.Message}{IdleSuffix()}");
                 DisposeConnection();
                 return false;
             }
@@ -561,9 +771,28 @@ public class ProxyEngine : IDisposable
         }
     }
 
+    /// <summary>
+    /// Read the sim's responses, re-frame them, and relay them upstream one object at a
+    /// time.
+    ///
+    /// The re-framing is not cosmetic. Infinite Tees batches messages: observed
+    /// 2026-08-16 sending two `Code 201`s in a single write with **no delimiter between
+    /// them** (`{…} {…}`), at a hole transition. Relaying that verbatim handed ProTee Labs
+    /// a frame shape the real GSPconnect never produces — every one of its 20 server
+    /// frames in `samples/protee-gspro.pcapng` is a single object, its 201 pair spaced
+    /// 256ms apart — and PTL closed the connection 4ms later.
+    ///
+    /// So we frame on brace depth (the same <see cref="JsonObjectFramer"/> that handles
+    /// PTL's un-delimited stream in the other direction) and write each object separately,
+    /// spaced by <see cref="UpstreamObjectGap"/> so a batch cannot land in one read on
+    /// PTL's side. It also fixes our own parsing: a batched pair failed
+    /// <see cref="LogServerResponse"/> outright, logging "Server (raw)" and silently
+    /// missing the 201 that drives the ready signal.
+    /// </summary>
     private async Task ReadResponsesAsync(NetworkStream stream, CancellationToken ct)
     {
         var buf = new byte[4096];
+        var framer = new JsonObjectFramer(MaxSimResponseBytes);
         try
         {
             while (!ct.IsCancellationRequested)
@@ -577,30 +806,62 @@ public class ProxyEngine : IDisposable
                 catch (ObjectDisposedException) { return; }
                 catch (IOException ex)
                 {
+                    // A stream that is no longer the current one was closed by us — a mode
+                    // switch, PTL leaving, or Stop. Reporting our own teardown as a "server
+                    // connection error" sent past debugging down the wrong path.
+                    if (!ReferenceEquals(_persistentStream, stream)) return;
+
                     var inner = ex.InnerException as SocketException;
                     Emit(inner is not null
-                        ? $"  Server connection error: {inner.SocketErrorCode} ({inner.Message})"
-                        : $"  Server connection error: {ex.Message}");
+                        ? $"  Server connection error: {inner.SocketErrorCode} ({inner.Message}){IdleSuffix()}"
+                        : $"  Server connection error: {ex.Message}{IdleSuffix()}");
                     InvalidateIfCurrent(stream);
                     return;
                 }
 
                 if (read == 0)
                 {
-                    Emit("  Server closed the connection (FIN).");
+                    Emit($"  Server closed the connection (FIN).{IdleSuffix()}");
                     InvalidateIfCurrent(stream);
                     return;
                 }
 
-                var response = buf[..read];
-                LogServerResponse(response);
+                _lastSimActivityUtc = DateTime.UtcNow;
 
-                // In proxy mode ProTee Labs is the real client — it needs the sim's
-                // acks to consider the connection healthy, so pass them straight back.
-                if (_listener is not null)
+                var relayed = 0;
+                foreach (var message in framer.Consume(buf, read))
                 {
-                    await _listener.SendUpstreamAsync(response, ct);
+                    var kinds = LogServerResponse(message);
+
+                    // In proxy mode ProTee Labs is the real client — it needs the sim's
+                    // acks to consider the connection healthy, so pass them straight back.
+                    if (_listener is null) continue;
+
+                    // Keep a batch out of a single read on PTL's side.
+                    if (relayed++ > 0) await Task.Delay(UpstreamObjectGap, ct);
+
+                    await _listener.SendUpstreamAsync(Encoding.UTF8.GetBytes(message), ct);
+
+                    if (kinds.Ready)
+                    {
+                        // The sim announced ready itself — stand down. Sending ours too
+                        // would hand PTL the same message twice per shot.
+                        ClearPendingReadySignal();
+                    }
+                    else if (kinds.PlayerInfo)
+                    {
+                        _simAnnouncesPlayerInfo = true;
+                        if (!_shotAwaitingReadySignal) continue;
+
+                        // The sim's player-info burst is the real "ball placed, game is
+                        // back" moment — GSPro's 202 follows it, so ours does too. Each
+                        // 201 pushes it back, so a pair produces one signal after the last.
+                        ScheduleReadySignal(ReadyAfterPlayerInfo, ct);
+                    }
                 }
+
+                if (framer.TakeOverflowFlag())
+                    Emit("  Sim response exceeded size limit — frame parser reset.");
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -616,12 +877,28 @@ public class ProxyEngine : IDisposable
         if (ReferenceEquals(_persistentStream, stream)) DisposeConnection();
     }
 
+    /// <summary>
+    /// How long the sim socket had been silent in both directions. Reported on every
+    /// drop: a close that lands ~10s after the last traffic is Infinite Tees's
+    /// ClientIdleTimeoutSec, whereas one that lands mid-conversation is the sim tearing
+    /// its socket hub down. The log line is the only place that distinction is visible.
+    /// </summary>
+    private string IdleSuffix() =>
+        _lastSimActivityUtc == default
+            ? string.Empty
+            : $" (no traffic for {(DateTime.UtcNow - _lastSimActivityUtc).TotalSeconds:F1}s)";
+
     private void DisposeConnection()
     {
+        // The shot that was awaiting a ready signal was going to that sim. With the link
+        // gone there is no game state left to describe.
+        ClearPendingReadySignal();
+
         var stream = _persistentStream;
         var client = _persistentClient;
         _persistentStream = null;
         _persistentClient = null;
+        if (IsConnected) _simDownSinceUtc = DateTime.UtcNow;
         IsConnected = false;
         try { stream?.Dispose(); } catch { }
         try { client?.Dispose(); } catch { }
@@ -755,26 +1032,63 @@ public class ProxyEngine : IDisposable
         ShotReceived?.Invoke(new ShotInfo(shotNum, ballSpeed, spin, vla, clubSpeed, true, true));
     }
 
-    private void LogServerResponse(byte[] data)
+    /// <summary>Which OpenConnect codes a batch of sim responses carried.</summary>
+    /// <param name="PlayerInfo">Code 201 — GSPro's "GSPro Player Information", Infinite Tees's "IT Player Information".</param>
+    /// <param name="Ready">Code 202 — the sim announced ready for the next shot on its own.</param>
+    private readonly record struct SimResponseKinds(bool PlayerInfo, bool Ready);
+
+    /// <summary>
+    /// Log one framed sim response. Takes a single JSON object — the framer has already
+    /// split any batch, so this no longer splits on newlines, which is what failed on
+    /// Infinite Tees's un-delimited `{…} {…}` pair.
+    /// </summary>
+    private SimResponseKinds LogServerResponse(string json)
     {
-        var text = Encoding.UTF8.GetString(data);
-        var lines = text.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        foreach (var line in lines)
+        try
         {
-            try
-            {
-                using var doc = JsonDocument.Parse(line);
-                var msg = doc.RootElement.TryGetProperty("Message", out var m) ? m.GetString() : null;
-                var code = doc.RootElement.TryGetProperty("Code", out var c) && c.ValueKind == JsonValueKind.Number
-                    ? c.GetInt32().ToString()
-                    : "?";
-                Emit($"  Server: [{code}] {msg ?? line}");
-            }
-            catch
-            {
-                Emit($"  Server (raw): {line}");
-            }
+            using var doc = JsonDocument.Parse(json);
+            var msg = doc.RootElement.TryGetProperty("Message", out var m) ? m.GetString() : null;
+            int? code = doc.RootElement.TryGetProperty("Code", out var c) && c.ValueKind == JsonValueKind.Number
+                ? c.GetInt32()
+                : null;
+
+            Emit($"  Server: [{code?.ToString() ?? "?"}] {msg ?? json}{PlayerSuffix(doc.RootElement)}");
+            return new SimResponseKinds(code == 201, code == 202);
         }
+        catch (JsonException)
+        {
+            Emit($"  Server (raw): {json}");
+            return default;
+        }
+    }
+
+    /// <summary>
+    /// Player context carried by a Code 201, appended to its log line.
+    ///
+    /// This is what lets a hole transition be identified in a log after the fact: the pair
+    /// "LW at 10.2 to target" then "GW at 111.1 to target" is holing out and teeing off,
+    /// which is how the 2026-08-16 disconnect was placed against a hole change. Parsing
+    /// the message down to "IT Player Information" threw that away — the only reason it
+    /// was visible at the time was that the batched pair failed to parse and got dumped raw.
+    /// </summary>
+    private static string PlayerSuffix(JsonElement root)
+    {
+        if (!root.TryGetProperty("Player", out var player) || player.ValueKind != JsonValueKind.Object)
+            return string.Empty;
+
+        var parts = new List<string>();
+
+        if (player.TryGetProperty("Handed", out var handed) && handed.ValueKind == JsonValueKind.String)
+            parts.Add(handed.GetString()!);
+        if (player.TryGetProperty("Club", out var club) && club.ValueKind == JsonValueKind.String)
+            parts.Add(club.GetString()!);
+        if (player.TryGetProperty("DistanceToTarget", out var distance) && distance.ValueKind == JsonValueKind.Number)
+            parts.Add($"{distance.GetDouble():F1} to target");
+        // Null in every capture so far, but it costs nothing to surface it if it ever isn't.
+        if (player.TryGetProperty("Surface", out var surface) && surface.ValueKind == JsonValueKind.String)
+            parts.Add(surface.GetString()!);
+
+        return parts.Count == 0 ? string.Empty : $" ({string.Join(", ", parts)})";
     }
 
     /// <summary>

@@ -138,12 +138,14 @@ public class TrayApplicationContext : ApplicationContext
         var (sim, port) = _engine.ResolveForwardTarget();
         var baseText = $"VX Connector — Proxy → {sim} :{port}";
 
+        // Only two states below, not four: with PTL away we close the sim link on
+        // purpose, so "waiting for the sim" would be reporting our own doing as
+        // something the user could go and fix.
         return (_engine.IsUpstreamConnected, _engine.IsConnected) switch
         {
             (true, true) => $"{baseText} (connected)",
             (true, false) => $"{baseText} (waiting for {sim})",
-            (false, true) => $"{baseText} (waiting for ProTee Labs)",
-            _ => $"{baseText} (waiting for ProTee Labs and {sim})",
+            _ => $"{baseText} (waiting for ProTee Labs)",
         };
     }
 

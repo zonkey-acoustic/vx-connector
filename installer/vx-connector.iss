@@ -10,7 +10,7 @@
 ;     full copy of a ~78 MB binary.
 ;
 ; Build:
-;   ISCC.exe /DMyAppVersion=1.5.0 installer\vx-connector.iss
+;   ISCC.exe /DMyAppVersion=1.5.2 installer\vx-connector.iss
 ; expects the published exe at installer\payload\vx-connector.exe.
 
 #ifndef MyAppVersion
@@ -37,8 +37,14 @@ AppUpdatesURL={#MyAppPublisherUrl}/releases
 DefaultDirName={localappdata}\Programs\VxConnector
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
+; Points at the exe rather than a copy of the .ico, so Add/Remove Programs picks up
+; whatever icon the installed binary carries — including after a self-update swaps it.
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
+
+; The setup binary's own icon. Sourced from the app project so there is one .ico in
+; the repo; ISCC resolves it relative to this script.
+SetupIconFile=..\dotnet\vx-connector.ico
 
 ; "lowest" keeps the common path prompt-free; the override lets an admin pick a
 ; per-machine location if they really want one. Note the in-app updater detects a

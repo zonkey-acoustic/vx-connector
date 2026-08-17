@@ -18,7 +18,7 @@ The sim target (Infinite Tees by default; Drills also supported) is selected via
 
 1. **Install** — download `VxConnectorSetup.exe` from the [latest release](https://github.com/zonkey-acoustic/vx-connector/releases/latest) and run it. It installs for your user only, so there's no admin prompt, and it adds a Start Menu shortcut plus an entry in **Settings → Apps** for clean removal. See [Installing](#installing) for the portable option and for what to expect from SmartScreen.
 
-2. **Launch VX Connector** — from the Start Menu, or double-click `vx-connector.exe`. The tray icon turns purple and the tooltip shows *"VX Connector — Proxy → InfiniteTees :999 (waiting for ProTee Labs and InfiniteTees)"*. It turns **green** once both ProTee Labs and your sim are connected.
+2. **Launch VX Connector** — from the Start Menu, or double-click `vx-connector.exe`. The tray icon turns purple and the tooltip shows *"VX Connector — Proxy → InfiniteTees :999 (waiting for ProTee Labs)"*. It turns **green** once both ProTee Labs and your sim are connected.
 
 3. **Launch Infinite Tees** (or Drills — see below) on its default port 999 — no configuration needed.
 
@@ -26,6 +26,13 @@ The sim target (Infinite Tees by default; Drills also supported) is selected via
    then the tray stays purple and Infinite Tees shows "not connected" — that's expected.
    VX Connector retries in the background, so it connects on its own the moment the port
    opens; you don't need to restart it or start things in a particular order.
+
+   **Your sim stays "not connected" until ProTee Labs is connected too**, even if it's
+   already in a round. That's deliberate: your sim decides whether to show *ready* purely
+   from whether something is holding the connection open, so VX Connector holds it open
+   only while a shot could actually get through. If it connected the moment it started,
+   your sim would sit at **READY** with ProTee Labs offline, and you'd only find out by
+   swinging.
 
 4. **Launch ProTee Labs**, go to **Game Options → Game: GSPro**, and hit **Connect**.
 
@@ -105,7 +112,11 @@ too if you want no trace left.
 | Teal   | Legacy folder-watcher mode (pre-beta ProTee Labs only)            |
 | Red    | Stopped                                                           |
 
-Purple isn't an error — it's the normal state until both ends are up. Hover the tray icon for the current sim target and port; when it's purple the tooltip names which side is still missing. Double-click to open the log window. Right-click for actions:
+Purple isn't an error — it's the normal state until both ends are up. Hover the tray icon for the current sim target and port; when it's purple the tooltip names which side is still missing. Double-click to open the log window.
+
+Purple always means your sim shows "not connected" as well: while ProTee Labs is away, VX Connector deliberately closes its connection to the sim rather than leave it advertising **READY** for shots that can't arrive. Green in the tray and *connected* in the sim mean the same thing, so you can trust either one.
+
+Right-click for actions:
 
 - **Show Log** — open the log window
 - **Check for Updates…** — ask GitHub now instead of waiting for the next scheduled check
@@ -165,7 +176,7 @@ To build the installer you also need [Inno Setup 6](https://jrsoftware.org/isdl.
 ```bash
 mkdir -p installer/payload
 cp dotnet/bin/Release/net8.0-windows/win-x64/publish/vx-connector.exe installer/payload/
-"/c/Program Files (x86)/Inno Setup 6/ISCC.exe" //DMyAppVersion=1.5.0 installer/vx-connector.iss
+"/c/Program Files (x86)/Inno Setup 6/ISCC.exe" //DMyAppVersion=1.5.2 installer/vx-connector.iss
 # Output: dist/VxConnectorSetup.exe
 ```
 
