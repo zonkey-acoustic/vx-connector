@@ -14,6 +14,9 @@ namespace VxProxy;
 /// right filename satisfies it — there is no signature or path validation, and the
 /// real GSPro does not need to be installed.
 ///
+/// ProTee Labs 1.12.13.0 tightened the gate: the process must also own a visible
+/// window titled exactly "ProTee United VX" — see <see cref="ExpectedWindowTitle"/>.
+///
 /// Rather than rename our own exe (reversing the v1.3.1 branding decision) or copy a
 /// ~70 MB self-contained binary, we hard-link our exe under the required name and run
 /// it with <c>--stub</c>, which parks the process doing nothing. A hard link shares
@@ -42,26 +45,85 @@ public static class GspConnectStub
         "VxConnector", "stub");
 
     /// <summary>
-    /// Park this process forever. Entered when we were launched with --stub: we exist
-    /// purely so ProTee Labs sees the name in the process list.
+    /// The main-window title the real GSPconnect shows once "ProTee VX" is selected
+    /// (<c>OpenSDKv1</c>, <c>LMtype == 2</c>). ProTee Labs 1.12.13.0 added
+    /// <c>IsVXConnectorValid</c>: it polls the GSPconnect process's
+    /// <c>MainWindowTitle</c> for up to 60s and requires an exact match, otherwise it
+    /// shows "Incompatible GSPro connector detected" and never opens the socket.
+    /// </summary>
+    public const string ExpectedWindowTitle = "ProTee United VX";
+
+    /// <summary>
+    /// Park this process, holding a window that carries <see cref="ExpectedWindowTitle"/>.
+    /// Entered when we were launched with --stub: we exist purely so ProTee Labs's
+    /// process and window-title checks pass.
     /// </summary>
     public static void RunAsStub()
     {
+        ApplicationConfiguration.Initialize();
+        using var window = new TitleWindow();
+
         // The parent kills us on exit; this also self-terminates if the parent died
         // without cleaning up (crash, kill -9), so we never leak a permanent process.
         var parentId = ResolveParentFromArgs();
-        while (true)
+        using var watchdog = new System.Windows.Forms.Timer { Interval = 2000 };
+        watchdog.Tick += (_, _) =>
         {
-            Thread.Sleep(2000);
-            if (parentId is null) continue;
+            if (parentId is null) return;
             try
             {
                 using var parent = Process.GetProcessById(parentId.Value);
-                if (parent.HasExited) return;
+                if (!parent.HasExited) return;
             }
             catch (ArgumentException)
             {
-                return; // parent is gone
+                // parent is gone
+            }
+            Application.ExitThread();
+        };
+        watchdog.Start();
+
+        Application.Run(window);
+    }
+
+    /// <summary>
+    /// A window that exists only to be found by <c>Process.MainWindowTitle</c>.
+    ///
+    /// .NET picks the main window as the first top-level window that is unowned and
+    /// <c>IsWindowVisible</c> — so a hidden window doesn't count, and neither would a
+    /// <c>CreateNoWindow</c> console. It has to be "shown". Everything else is spent
+    /// making that invisible to the user: fully transparent, click-through, 1×1 and
+    /// off-screen, never activated, and a tool window so it stays out of the taskbar
+    /// and Alt-Tab.
+    /// </summary>
+    private sealed class TitleWindow : Form
+    {
+        private const int WS_EX_TRANSPARENT = 0x00000020;
+        private const int WS_EX_TOOLWINDOW = 0x00000080;
+        private const int WS_EX_NOACTIVATE = 0x08000000;
+
+        public TitleWindow()
+        {
+            Text = ExpectedWindowTitle;
+            FormBorderStyle = FormBorderStyle.None;
+            // Deliberately not ShowInTaskbar = false: WinForms implements that by giving
+            // the form a hidden owner window, and an owned window is never a main window.
+            // WS_EX_TOOLWINDOW keeps it off the taskbar instead.
+            StartPosition = FormStartPosition.Manual;
+            Location = new Point(-32000, -32000);
+            Size = new Size(1, 1);
+            Opacity = 0;
+        }
+
+        protected override bool ShowWithoutActivation => true;
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                var cp = base.CreateParams;
+                cp.ExStyle |= WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT;
+                return cp;
             }
         }
     }

@@ -15,8 +15,8 @@ static class Program
     [STAThread]
     static void Main(string[] args)
     {
-        // Launched as our own GSPconnect.exe stub: park and do nothing else. Must be
-        // checked before anything that creates windows or kills sibling processes.
+        // Launched as our own GSPconnect.exe stub: park behind its title window and do
+        // nothing else. Must be checked before the tray UI or killing sibling processes.
         if (args.Any(a => a.Equals(GspConnectStub.StubArgument, StringComparison.OrdinalIgnoreCase)))
         {
             GspConnectStub.RunAsStub();
