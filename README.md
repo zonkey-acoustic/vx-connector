@@ -7,7 +7,7 @@ ProTee VX  →  ProTee Labs  ──:12321──►  VX Connector  ═══►  
                                                         (persistent TCP)
 ```
 
-The sim target (Infinite Tees by default; Drills, ShotForge and other OpenAPI-compatible sims also supported) is selected via the tray menu.
+The sim target (Infinite Tees or OpenAPI Compatible, which covers Drills, ShotForge and other OpenAPI-compatible sims) is selected via the tray menu. On first launch VX Connector picks Infinite Tees if it finds it on the PC, and OpenAPI Compatible otherwise. After that it remembers your last choice.
 
 > **On ProTee Labs 1.12.9.0 or newer, you need VX Connector v1.4.0+.** That ProTee Labs
 > release stopped writing `ShotData.json` and removed the OpenAPI (:921) connector, which

@@ -16,6 +16,16 @@ public static class SimConfig
     public const string DrillsJsonPath =
         @"C:\Program Files\DrillsGolfSimulator\Drills\DrillsConnect\settings.json";
 
+    /// <summary>
+    /// Best available "is Infinite Tees on this machine" signal. It registers no
+    /// uninstall entry, so we go by its per-user data folder — which the game creates
+    /// on first run, not at install. A freshly installed, never-launched copy
+    /// therefore reads as absent.
+    /// </summary>
+    public static bool IsInfiniteTeesInstalled() => Directory.Exists(Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "InfiniteTees"));
+
     private static readonly Regex PortRegex = new(@"Port=(\d+)", RegexOptions.Compiled);
 
     /// <summary>Returns the port Infinite Tees is configured to listen on, or null if not found.</summary>

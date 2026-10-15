@@ -48,11 +48,14 @@ static class Program
         ApplicationConfiguration.Initialize();
 
         // Startup mode resolution: explicit CLI flag wins; otherwise fall back
-        // to whatever the user last picked via the tray menu (persisted); finally
-        // default to Folder Watcher → Infinite Tees if nothing's been saved.
+        // to whatever the user last picked via the tray menu (persisted); finally,
+        // with nothing saved, Proxy → Infinite Tees if it's on this machine and
+        // Proxy → OpenAPI Compatible (Drills, ShotForge, …) if it isn't.
         var startupMode = ParseStartupModeFromArgs(args)
             ?? UserSettings.LoadLastMode()
-            ?? EngineMode.ProxyInfiniteTees;
+            ?? (SimConfig.IsInfiniteTeesInstalled()
+                ? EngineMode.ProxyInfiniteTees
+                : EngineMode.ProxyDrills);
 
         var detected = SimConfig.DetectDirectTarget();
 
