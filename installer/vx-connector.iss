@@ -10,7 +10,7 @@
 ;     full copy of a ~78 MB binary.
 ;
 ; Build:
-;   ISCC.exe /DMyAppVersion=1.5.3 installer\vx-connector.iss
+;   ISCC.exe /DMyAppVersion=1.5.4 installer\vx-connector.iss
 ; expects the published exe at installer\payload\vx-connector.exe.
 
 #ifndef MyAppVersion

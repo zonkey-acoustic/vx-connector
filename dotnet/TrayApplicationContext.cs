@@ -117,8 +117,8 @@ public class TrayApplicationContext : ApplicationContext
     {
         if (sims == SimTarget.None) return null;
         var parts = new List<string>();
-        if (sims.HasFlag(SimTarget.Drills)) parts.Add("Drills");
-        if (sims.HasFlag(SimTarget.InfiniteTees)) parts.Add("Infinite Tees");
+        if (sims.HasFlag(SimTarget.Drills)) parts.Add(SimTarget.Drills.DisplayName());
+        if (sims.HasFlag(SimTarget.InfiniteTees)) parts.Add(SimTarget.InfiniteTees.DisplayName());
         return string.Join("/", parts);
     }
 
@@ -196,7 +196,7 @@ public class TrayApplicationContext : ApplicationContext
         menu.Items.Add(new ToolStripSeparator());
 
         var toDrillsItem = menu.Items.Add(
-            "Switch to Drills",
+            "Switch to OpenAPI Compatible",
             null,
             (_, _) => SwitchEngineMode(EngineMode.ProxyDrills));
         var toIteesItem = menu.Items.Add(
@@ -208,7 +208,7 @@ public class TrayApplicationContext : ApplicationContext
         // ShotData.json — the beta doesn't. Kept reachable, but out of the way.
         var legacyMenu = new ToolStripMenuItem("Legacy (pre-beta ProTee Labs)");
         var toWatchDrillsItem = legacyMenu.DropDownItems.Add(
-            "Folder Watcher → Drills",
+            "Folder Watcher → OpenAPI Compatible",
             null,
             (_, _) => SwitchEngineMode(EngineMode.FolderWatcherDrills));
         var toWatchIteesItem = legacyMenu.DropDownItems.Add(

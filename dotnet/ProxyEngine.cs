@@ -281,7 +281,7 @@ public class ProxyEngine : IDisposable
         // Direct mode — nothing to bind, nothing to watch. Just exist.
         IsRunning = true;
         var directTarget = SimConfig.DetectDirectTarget();
-        var label = directTarget == SimTarget.None ? "the target sim" : directTarget.ToString();
+        var label = TrayApplicationContext.FormatSims(directTarget) ?? "the target sim";
         Emit($"Direct mode — VX Connector is idle. ProTee Labs talks straight to {label} on :921.");
         OnStatusChanged();
         return true;
@@ -292,12 +292,12 @@ public class ProxyEngine : IDisposable
     /// from sim config each call so a user changing the sim's port mid-session
     /// is picked up on the next shot.
     /// </summary>
-    public (SimTarget sim, int port) ResolveForwardTarget() => Mode switch
+    public (string sim, int port) ResolveForwardTarget() => Mode switch
     {
         EngineMode.FolderWatcherDrills or EngineMode.ProxyDrills =>
-            (SimTarget.Drills, SimConfig.GetDrillsPort() ?? 921),
+            (SimTarget.Drills.DisplayName(), SimConfig.GetDrillsPort() ?? 921),
         EngineMode.FolderWatcherInfiniteTees or EngineMode.ProxyInfiniteTees =>
-            (SimTarget.InfiniteTees, SimConfig.GetInfiniteTeesPort() ?? 999),
+            (SimTarget.InfiniteTees.DisplayName(), SimConfig.GetInfiniteTeesPort() ?? 999),
         _ => throw new InvalidOperationException(
             "ResolveForwardTarget is only valid in a forwarding mode."),
     };

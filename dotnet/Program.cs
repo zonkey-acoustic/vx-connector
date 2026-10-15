@@ -10,6 +10,22 @@ public enum SimTarget
     Drills = 1 << 1,
 }
 
+static class SimTargetExtensions
+{
+    /// <summary>
+    /// User-facing name. The Drills target is shown as "OpenAPI Compatible" because it
+    /// isn't Drills-specific: it speaks plain OpenConnect on :921 (or whatever
+    /// DrillsConnect's settings.json says), which any OpenAPI-style sim — Drills,
+    /// ShotForge — can accept.
+    /// </summary>
+    public static string DisplayName(this SimTarget sim) => sim switch
+    {
+        SimTarget.Drills => "OpenAPI Compatible",
+        SimTarget.InfiniteTees => "Infinite Tees",
+        _ => sim.ToString(),
+    };
+}
+
 static class Program
 {
     [STAThread]

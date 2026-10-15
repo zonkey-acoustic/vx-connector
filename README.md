@@ -1,13 +1,13 @@
 # VX Connector
 
-An unofficial Windows helper that lets your **ProTee VX** launch monitor talk to **Infinite Tees** or **Drills**. VX Connector runs in the system tray, receives shots directly from ProTee Labs, and forwards them to your sim over a persistent TCP connection.
+An unofficial Windows helper that lets your **ProTee VX** launch monitor talk to **Infinite Tees**, **Drills** or **ShotForge**. VX Connector runs in the system tray, receives shots directly from ProTee Labs, and forwards them to your sim over a persistent TCP connection.
 
 ```
-ProTee VX  →  ProTee Labs  ──:12321──►  VX Connector  ═══►  Infinite Tees (:999) / Drills (:921)
+ProTee VX  →  ProTee Labs  ──:12321──►  VX Connector  ═══►  Infinite Tees (:999) / Drills, ShotForge (:921)
                                                         (persistent TCP)
 ```
 
-The sim target (Infinite Tees by default; Drills also supported) is selected via the tray menu.
+The sim target (Infinite Tees by default; Drills, ShotForge and other OpenAPI-compatible sims also supported) is selected via the tray menu.
 
 > **On ProTee Labs 1.12.9.0 or newer, you need VX Connector v1.4.0+.** That ProTee Labs
 > release stopped writing `ShotData.json` and removed the OpenAPI (:921) connector, which
@@ -20,7 +20,7 @@ The sim target (Infinite Tees by default; Drills also supported) is selected via
 
 2. **Launch VX Connector** — from the Start Menu, or double-click `vx-connector.exe`. The tray icon turns purple and the tooltip shows *"VX Connector — Proxy → InfiniteTees :999 (waiting for ProTee Labs)"*. It turns **green** once both ProTee Labs and your sim are connected.
 
-3. **Launch Infinite Tees** (or Drills — see below) on its default port 999 — no configuration needed.
+3. **Launch Infinite Tees** (or Drills / ShotForge — see below) on its default port 999 — no configuration needed.
 
    Infinite Tees only opens that port once you're in a **round or practice range**. Until
    then the tray stays purple and Infinite Tees shows "not connected" — that's expected.
@@ -42,9 +42,9 @@ The sim target (Infinite Tees by default; Drills also supported) is selected via
 
 You do **not** need GSPro installed, and you do not need a GSPro licence.
 
-### Drills
+### OpenAPI Compatible (Drills, ShotForge)
 
-If you use Drills instead of Infinite Tees, right-click the tray icon and pick **"Switch to Drills"** (or launch with `vx-connector.exe --proxy-drills`). Drills uses port 921 by default; no further config needed.
+If you use Drills, ShotForge or another OpenAPI-compatible sim instead of Infinite Tees, right-click the tray icon and pick **"Switch to OpenAPI Compatible"** (or launch with `vx-connector.exe --proxy-drills`). Shots go to port 921, which is the default for both Drills and ShotForge, so no further config is needed. If Drills is installed and configured for a different port, VX Connector picks that up from its `settings.json`. Any other OpenAPI-compatible sim needs to listen for OpenConnect on port 921.
 
 ## Installing
 
@@ -120,7 +120,7 @@ Right-click for actions:
 
 - **Show Log** — open the log window
 - **Check for Updates…** — ask GitHub now instead of waiting for the next scheduled check
-- **Switch to Drills** — forward shots to Drills (default port 921)
+- **Switch to OpenAPI Compatible** — forward shots to Drills, ShotForge or another OpenAPI-compatible sim (default port 921)
 - **Switch to Infinite Tees** — forward shots to Infinite Tees (default port 999)
 - **Legacy (pre-beta ProTee Labs)** — the old folder-watcher modes
 - **Start with Windows** — launch VX Connector automatically at login
@@ -154,7 +154,7 @@ VX Connector also enforces single-instance: launching it again will kill any pri
 
 - Windows 10/11 (x64)
 - ProTee Labs with a ProTee VX
-- Infinite Tees or Drills
+- Infinite Tees, Drills, ShotForge, or another OpenAPI-compatible sim
 
 No .NET install needed — the release exe is self-contained. GSPro is **not** required. An
 internet connection is optional: it's used only for the update check.
@@ -176,7 +176,7 @@ To build the installer you also need [Inno Setup 6](https://jrsoftware.org/isdl.
 ```bash
 mkdir -p installer/payload
 cp dotnet/bin/Release/net8.0-windows/win-x64/publish/vx-connector.exe installer/payload/
-"/c/Program Files (x86)/Inno Setup 6/ISCC.exe" //DMyAppVersion=1.5.3 installer/vx-connector.iss
+"/c/Program Files (x86)/Inno Setup 6/ISCC.exe" //DMyAppVersion=1.5.4 installer/vx-connector.iss
 # Output: dist/VxConnectorSetup.exe
 ```
 

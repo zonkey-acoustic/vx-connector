@@ -16,9 +16,9 @@
     <ApplicationIcon>vx-connector.ico</ApplicationIcon>
     <Product>VX Connector</Product>
     <AssemblyTitle>VX Connector</AssemblyTitle>
-    <Version>1.5.3</Version>
-    <FileVersion>1.5.3</FileVersion>
-    <InformationalVersion>1.5.3</InformationalVersion>
+    <Version>1.5.4</Version>
+    <FileVersion>1.5.4</FileVersion>
+    <InformationalVersion>1.5.4</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Copyright>Copyright © 2026</Copyright>
     <Company></Company>
