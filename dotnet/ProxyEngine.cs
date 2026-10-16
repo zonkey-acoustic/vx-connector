@@ -47,6 +47,7 @@ public class ProxyEngine : IDisposable
     private CancellationTokenSource? _cts;
     private ShotFolderWatcher? _folderWatcher;
     private OpenConnectListener? _listener;
+    private SplitShotMerger? _merger;
     private int _watcherShotNumber;
 
     // Persistent TCP connection to the sim. Held across shots so the sim's UI sees us as
@@ -224,13 +225,18 @@ public class ProxyEngine : IDisposable
             _listener = new OpenConnectListener();
             _listener.Log += Emit;
             _listener.Error += Emit;
-            _listener.MessageReceived += json => _ = HandleUpstreamMessageAsync(json, _cts.Token);
+            // PTL -> merger -> sim. The merger rejoins split ball/club swings; see SplitShotMerger.
+            var ct = _cts.Token;
+            _merger = new SplitShotMerger(json => _ = HandleUpstreamMessageAsync(json, ct), Emit);
+            _listener.MessageReceived += _merger.Offer;
             _listener.UpstreamConnectionChanged += OnUpstreamConnectionChanged;
 
             if (!_listener.Start())
             {
                 _listener.Dispose();
                 _listener = null;
+                _merger.Dispose();
+                _merger = null;
                 GspConnectStub.Stop();
                 _cts.Dispose();
                 _cts = null;
@@ -311,6 +317,8 @@ public class ProxyEngine : IDisposable
         _folderWatcher = null;
         _listener?.Dispose();
         _listener = null;
+        _merger?.Dispose();
+        _merger = null;
         GspConnectStub.Stop();
         // Disposing the connection forces any in-flight ReadAsync to unblock
         // (cancellation doesn't propagate cleanly through socket reads on Windows).
@@ -338,10 +346,10 @@ public class ProxyEngine : IDisposable
     /// re-serializing would only risk field drift. The one change is appending the
     /// newline PTL omits on this lane but the sims require as a message delimiter.
     ///
-    /// PTL splits a shot across messages inconsistently — sometimes one combined
-    /// ball+club message, sometimes ball-only then club-only under the same
-    /// ShotNumber. We pass each through as-is rather than trying to merge, which is
-    /// what the sims already expect (see samples/itees-protee.pcapng).
+    /// The one exception is a swing PTL split into ball-only then club-only under the
+    /// same ShotNumber: SplitShotMerger, upstream of this, rejoins it into the combined
+    /// shape, because every sim we've tested mishandles the split one. What reaches
+    /// this method is otherwise exactly what PTL sent.
     /// </summary>
     private async Task HandleUpstreamMessageAsync(string json, CancellationToken ct)
     {
@@ -420,9 +428,9 @@ public class ProxyEngine : IDisposable
             var vla = ParseNumeric(ball, "VLA");
             var clubSpeed = ParseNumeric(club, "Speed");
 
-            // When PTL splits a swing it sends ball-only then club-only under one
-            // ShotNumber. The ball message is the shot; the club follow-up is noted
-            // but must not count again or re-fire the shot readout.
+            // A split swing normally arrives here already merged (SplitShotMerger). A
+            // club-only message only gets this far if its ball half was released on its
+            // own first; it's noted but must not count again or re-fire the readout.
             if (!hasBall)
             {
                 Emit($"  Club data for #{shotNum}: ClubSpeed={clubSpeed:F1}");
@@ -503,7 +511,9 @@ public class ProxyEngine : IDisposable
 
         // Any shot still awaiting its ready signal belonged to the connection that just
         // ended. Carrying it across would fire a "ready" at a PTL that never sent a shot.
+        // The same goes for a half-swing the merger is still holding.
         ClearPendingReadySignal();
+        _merger?.Discard();
 
         if (connected)
         {

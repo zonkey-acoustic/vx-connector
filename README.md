@@ -45,7 +45,7 @@ You do **not** need GSPro installed, and you do not need a GSPro licence.
 
 ### OpenAPI Compatible (Drills, ShotForge)
 
-If you use Drills, ShotForge or another OpenAPI-compatible sim instead of Infinite Tees, right-click the tray icon and pick **"Switch to OpenAPI Compatible"** (or launch with `vx-connector.exe --proxy-drills`). Shots go to port 921, which is the default for both Drills and ShotForge, so no further config is needed. If Drills is installed and configured for a different port, VX Connector picks that up from its `settings.json`. Any other OpenAPI-compatible sim needs to listen for OpenConnect on port 921.
+If you use Drills, ShotForge or another OpenAPI-compatible sim instead of Infinite Tees, right-click the tray icon and pick **"Switch to OpenAPI Compatible"** (or launch with `vx-connector.exe --proxy-open-api`). Shots go to port 921, which is the default for both Drills and ShotForge, so no further config is needed. If Drills is installed and configured for a different port, VX Connector picks that up from its `settings.json`. Any other OpenAPI-compatible sim needs to listen for OpenConnect on port 921.
 
 ## Installing
 
@@ -175,7 +175,7 @@ To build the installer you also need [Inno Setup 6](https://jrsoftware.org/isdl.
 ```bash
 mkdir -p installer/payload
 cp dotnet/bin/Release/net8.0-windows/win-x64/publish/vx-connector.exe installer/payload/
-"/c/Program Files (x86)/Inno Setup 6/ISCC.exe" //DMyAppVersion=1.5.5 installer/vx-connector.iss
+"/c/Program Files (x86)/Inno Setup 6/ISCC.exe" //DMyAppVersion=1.5.6 installer/vx-connector.iss
 # Output: dist/VxConnectorSetup.exe
 ```
 

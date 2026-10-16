@@ -65,7 +65,8 @@ static class Program
     /// <summary>
     /// CLI:
     ///   (none)                          → use persisted preference, else default
-    ///   --proxy-drills                  → Proxy → Drills
+    ///   --proxy-open-api                → Proxy → OpenAPI Compatible (Drills, ShotForge, …)
+    ///   --proxy-drills                  → alias for --proxy-open-api (pre-1.5.6 name)
     ///   --proxy-itees / --proxy-infinite-tees → Proxy → Infinite Tees
     ///   --watch-drills                  → Folder Watcher → Drills (legacy PTL only)
     ///   --watch-itees / --watch-infinite-tees → Folder Watcher → Infinite Tees (legacy)
@@ -91,7 +92,10 @@ static class Program
         {
             if (arg.Equals("--direct", StringComparison.OrdinalIgnoreCase))
                 return EngineMode.Direct;
-            if (arg.Equals("--proxy-drills", StringComparison.OrdinalIgnoreCase))
+            // --proxy-drills must keep working: an older version applying a self-update
+            // relaunches the new exe with the flag *it* knows (UpdateApplier.RestartInto).
+            if (arg.Equals("--proxy-open-api", StringComparison.OrdinalIgnoreCase) ||
+                arg.Equals("--proxy-drills", StringComparison.OrdinalIgnoreCase))
                 return EngineMode.ProxyDrills;
             if (arg.Equals("--proxy-itees", StringComparison.OrdinalIgnoreCase) ||
                 arg.Equals("--proxy-infinite-tees", StringComparison.OrdinalIgnoreCase))
@@ -116,7 +120,7 @@ static class Program
     internal static string? CliFlagFor(EngineMode mode) => mode switch
     {
         EngineMode.Direct => "--direct",
-        EngineMode.ProxyDrills => "--proxy-drills",
+        EngineMode.ProxyDrills => "--proxy-open-api",
         EngineMode.ProxyInfiniteTees => "--proxy-itees",
         EngineMode.FolderWatcherDrills => "--watch-drills",
         EngineMode.FolderWatcherInfiniteTees => "--watch-itees",
