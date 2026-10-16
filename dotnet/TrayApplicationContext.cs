@@ -204,19 +204,6 @@ public class TrayApplicationContext : ApplicationContext
             null,
             (_, _) => SwitchEngineMode(EngineMode.ProxyInfiniteTees));
 
-        // Folder Watcher only works on ProTee Labs builds that still write
-        // ShotData.json — the beta doesn't. Kept reachable, but out of the way.
-        var legacyMenu = new ToolStripMenuItem("Legacy (pre-beta ProTee Labs)");
-        var toWatchDrillsItem = legacyMenu.DropDownItems.Add(
-            "Folder Watcher → OpenAPI Compatible",
-            null,
-            (_, _) => SwitchEngineMode(EngineMode.FolderWatcherDrills));
-        var toWatchIteesItem = legacyMenu.DropDownItems.Add(
-            "Folder Watcher → Infinite Tees",
-            null,
-            (_, _) => SwitchEngineMode(EngineMode.FolderWatcherInfiniteTees));
-        menu.Items.Add(legacyMenu);
-
         menu.Items.Add(new ToolStripSeparator());
         var startWithWindowsItem = new ToolStripMenuItem("Start with Windows")
         {
@@ -247,8 +234,6 @@ public class TrayApplicationContext : ApplicationContext
 
             toDrillsItem.Visible = _engine.Mode != EngineMode.ProxyDrills;
             toIteesItem.Visible = _engine.Mode != EngineMode.ProxyInfiniteTees;
-            toWatchDrillsItem.Visible = _engine.Mode != EngineMode.FolderWatcherDrills;
-            toWatchIteesItem.Visible = _engine.Mode != EngineMode.FolderWatcherInfiniteTees;
         };
 
         return menu;

@@ -24,8 +24,11 @@ public static class UserSettings
     /// existed (v1.3.3 and earlier) have no "schema" key and are treated as 1.
     ///
     /// Adding a key doesn't need a bump — an absent key falls back to its default.
+    ///
+    /// 3: Folder Watcher left the tray menu, so a saved Folder Watcher mode can only
+    /// be a leftover. Migrated again for those who re-picked it after schema 2.
     /// </summary>
-    private const int CurrentSchema = 2;
+    private const int CurrentSchema = 3;
 
     public static readonly string SettingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -41,7 +44,7 @@ public static class UserSettings
 
         if (stored.Schema < CurrentSchema)
         {
-            mode = MigrateFromSchema1(mode);
+            mode = MigrateFolderWatcher(mode);
             Write(mode, stored.UpdateChecks);
         }
 
@@ -56,15 +59,16 @@ public static class UserSettings
     public static void SaveUpdateChecksEnabled(bool enabled) => Write(Read().LastMode, enabled);
 
     /// <summary>
-    /// Everyone upgrading from v1.3.3 or earlier has a FolderWatcher mode saved,
-    /// because that was the only forwarding mode. On ProTee Labs 1.12.9.0+ that mode
-    /// receives nothing at all, so honouring it would leave upgraders silently dead —
-    /// move them to the equivalent proxy target instead.
+    /// A saved FolderWatcher mode comes from v1.3.3 or earlier (the only forwarding
+    /// mode then) or from the tray's old Legacy submenu (v1.4.0–v1.5.4). On ProTee
+    /// Labs 1.12.9.0+ that mode receives nothing at all, and the tray can no longer
+    /// select it, so honouring it would leave the user silently dead. Move them to the
+    /// equivalent proxy target instead.
     ///
-    /// Only applied once. After migration the file carries the current schema, so a
-    /// user who deliberately picks legacy mode afterwards keeps it.
+    /// The mode is now reachable only through the --watch-* flags, which never write
+    /// this file, so nothing saved can need this again after the migration runs.
     /// </summary>
-    private static EngineMode MigrateFromSchema1(EngineMode saved) => saved switch
+    private static EngineMode MigrateFolderWatcher(EngineMode saved) => saved switch
     {
         EngineMode.FolderWatcherDrills => EngineMode.ProxyDrills,
         EngineMode.FolderWatcherInfiniteTees => EngineMode.ProxyInfiniteTees,

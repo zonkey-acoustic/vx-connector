@@ -75,6 +75,10 @@ static class Program
     /// do not update the persisted preference. Use the tray menu to change the
     /// sticky default.
     ///
+    /// The --watch-* flags are the only way into Folder Watcher mode since v1.5.5
+    /// dropped it from the tray menu. They're kept, undocumented, for anyone still on a
+    /// ProTee Labs build older than 1.12.9.0.
+    ///
     /// --direct exists but is intentionally undocumented; Direct mode is hidden
     /// from users since v1.3.x. Kept as an escape hatch for the rare case where
     /// someone wants VX Connector to just exist as a tray process without

@@ -12,7 +12,8 @@ The sim target (Infinite Tees or OpenAPI Compatible, which covers Drills, ShotFo
 > **On ProTee Labs 1.12.9.0 or newer, you need VX Connector v1.4.0+.** That ProTee Labs
 > release stopped writing `ShotData.json` and removed the OpenAPI (:921) connector, which
 > broke every earlier version of VX Connector. If you're still on an older ProTee Labs
-> build, either version works — see [Legacy folder-watcher mode](#legacy-folder-watcher-mode).
+> build, the legacy folder-watcher mode is still available by launching with `--watch-itees`
+> or `--watch-drills`.
 
 ## Quick Start
 
@@ -109,7 +110,6 @@ too if you want no trace left.
 |--------|-------------------------------------------------------------------|
 | Green  | Connected end to end — ProTee Labs **and** your sim               |
 | Purple | Proxy running, but one side isn't connected yet                   |
-| Teal   | Legacy folder-watcher mode (pre-beta ProTee Labs only)            |
 | Red    | Stopped                                                           |
 
 Purple isn't an error — it's the normal state until both ends are up. Hover the tray icon for the current sim target and port; when it's purple the tooltip names which side is still missing. Double-click to open the log window.
@@ -122,7 +122,6 @@ Right-click for actions:
 - **Check for Updates…** — ask GitHub now instead of waiting for the next scheduled check
 - **Switch to OpenAPI Compatible** — forward shots to Drills, ShotForge or another OpenAPI-compatible sim (default port 921)
 - **Switch to Infinite Tees** — forward shots to Infinite Tees (default port 999)
-- **Legacy (pre-beta ProTee Labs)** — the old folder-watcher modes
 - **Start with Windows** — launch VX Connector automatically at login
 - **Automatically Check for Updates** — turn the six-hourly check on or off
 - **Quit** — exit VX Connector
@@ -176,7 +175,7 @@ To build the installer you also need [Inno Setup 6](https://jrsoftware.org/isdl.
 ```bash
 mkdir -p installer/payload
 cp dotnet/bin/Release/net8.0-windows/win-x64/publish/vx-connector.exe installer/payload/
-"/c/Program Files (x86)/Inno Setup 6/ISCC.exe" //DMyAppVersion=1.5.4 installer/vx-connector.iss
+"/c/Program Files (x86)/Inno Setup 6/ISCC.exe" //DMyAppVersion=1.5.5 installer/vx-connector.iss
 # Output: dist/VxConnectorSetup.exe
 ```
 
