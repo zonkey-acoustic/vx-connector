@@ -24,11 +24,6 @@ Any other sim that accepts OpenAPI (OpenConnect) shots on port 921 should work i
 - ProTee Labs with a ProTee VX
 - A sim from the [table above](#supported-sims)
 
-Nothing else to install: the exe is self-contained.
-
-> **ProTee Labs 1.12.9.0 or newer needs VX Connector v1.4.0+.** On older ProTee Labs builds,
-> launch with `--watch-itees` or `--watch-drills` to use the legacy folder-watcher mode.
-
 ## Install
 
 Download from the [latest release](https://github.com/zonkey-acoustic/vx-connector/releases/latest):
@@ -89,25 +84,6 @@ It never updates without your click. The update check is the only internet traff
 - **Portable:** untick **Start with Windows**, quit, then delete the exe and the `GSPconnect.exe` beside it.
 
 Your settings are kept in `%APPDATA%\VxConnector`. Delete that folder as well if you want to remove everything.
-
-## Building
-
-```bash
-cd dotnet
-dotnet publish -c Release
-# Output: bin/Release/net8.0-windows/win-x64/publish/vx-connector.exe
-```
-
-To build the installer you also need [Inno Setup 6](https://jrsoftware.org/isdl.php):
-
-```bash
-mkdir -p installer/payload
-cp dotnet/bin/Release/net8.0-windows/win-x64/publish/vx-connector.exe installer/payload/
-"/c/Program Files (x86)/Inno Setup 6/ISCC.exe" //DMyAppVersion=1.5.6 installer/vx-connector.iss
-# Output: dist/VxConnectorSetup.exe
-```
-
-To cut a release, push a `v*.*.*` tag that matches the `<Version>` in the csproj. CI builds the exe and installer, generates their checksums, and attaches them to the release.
 
 ## Note
 
