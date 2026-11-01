@@ -2,10 +2,6 @@
 
 An unofficial Windows tray app that sends shots from a **ProTee VX** launch monitor to **Infinite Tees** or any OpenAPI-compatible sim. GSPro and a GSPro licence are **not** required.
 
-```
-ProTee VX  →  ProTee Labs  ──:12321──►  VX Connector  ──►  Infinite Tees (:999) / OpenAPI-compatible sims (:921)
-```
-
 ## Supported Sims
 
 | Sim | VX Connector mode | Port | Tested |
