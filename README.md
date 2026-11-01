@@ -1,6 +1,6 @@
 # VX Connector
 
-An unofficial Windows tray app that sends shots from a **ProTee VX** launch monitor to **Infinite Tees** or any OpenAPI-compatible sim. GSPro and a GSPro licence are **not** required.
+An unofficial Windows tray app that sends shots from a ProTee VX launch monitor to Infinite Tees or any OpenAPI-compatible sim. GSPro and a GSPro licence are not required.
 
 ## Supported Sims
 
@@ -12,7 +12,7 @@ An unofficial Windows tray app that sends shots from a **ProTee VX** launch moni
 | Drills | OpenAPI Compatible | 921 | ✅ |
 | Muni Golf | OpenAPI Compatible | 921 | ✅ |
 
-Any other sim that accepts OpenAPI (OpenConnect) shots on port 921 should work in **OpenAPI Compatible** mode. If you've tried one that isn't listed, please open an issue and say whether it worked.
+Any other sim that accepts GSPro OpenAPI (OpenConnect) shots on port 921 should work in OpenAPI Compatible mode. If you've tried one that isn't listed, please open an issue and say whether it worked.
 
 ## Requirements
 
