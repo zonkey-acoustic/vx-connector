@@ -278,6 +278,38 @@ public static class GspConnectStub
         throw lastFailure ?? new IOException("No writable location for the GSPconnect stub.");
     }
 
+    /// <summary>
+    /// True if <paramref name="process"/> is a stub of ours rather than the real
+    /// GSPconnect. Matches the tracked PID, and also the staged path. The path check
+    /// covers the moment between <c>Process.Start</c> creating the stub and
+    /// <see cref="_stub"/> being assigned. Without it, <see cref="GsproWatcher"/> could
+    /// mistake our own stub for GSPro, pause, kill it, resume and loop.
+    ///
+    /// A process whose image path we can't read counts as foreign. Our stub runs as us,
+    /// unelevated, so its path is always readable. An unreadable one isn't ours.
+    /// </summary>
+    public static bool IsOwnStub(Process process)
+    {
+        if (_stub is { } stub && stub.Id == process.Id) return true;
+
+        string? path;
+        try { path = process.MainModule?.FileName; }
+        catch { return false; }
+        if (string.IsNullOrEmpty(path)) return false;
+
+        var ownDir = Path.GetDirectoryName(Environment.ProcessPath);
+        foreach (var dir in new[] { ownDir, FallbackStubDirectory })
+        {
+            if (string.IsNullOrEmpty(dir)) continue;
+            if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(Path.Combine(dir, StubExeName)),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// <summary>Stop the stub we started. Never touches a GSPconnect we didn't launch.</summary>
     public static void Stop()
     {

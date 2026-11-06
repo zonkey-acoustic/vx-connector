@@ -6,7 +6,24 @@ using System.Text.RegularExpressions;
 
 namespace VxProxy;
 
-public enum ConnectionStatus { Stopped, Direct, FolderWatcher, Proxy }
+public enum ConnectionStatus { Stopped, Direct, FolderWatcher, Proxy, Paused }
+
+/// <summary>
+/// Why the engine is deliberately stood down rather than merely stopped. A pause is a
+/// Stop that remembers it should come back: <see cref="ProxyEngine.Resume"/> restarts
+/// in the same mode, and the UI shows the reason instead of "Stopped".
+/// </summary>
+public enum PauseReason
+{
+    None,
+    /// <summary>The user picked "Pause" from the tray.</summary>
+    User,
+    /// <summary>
+    /// The real GSPro is running. Our stub and :12321 listener would otherwise capture
+    /// ProTee Labs's GSPro lane — see <see cref="GsproWatcher"/>.
+    /// </summary>
+    Gspro,
+}
 
 public enum EngineMode
 {
@@ -187,14 +204,21 @@ public class ProxyEngine : IDisposable
         }
     }
 
+    /// <summary>Non-<see cref="PauseReason.None"/> while paused. Cleared by any Start.</summary>
+    public PauseReason PauseReason { get; private set; }
+
     public ConnectionStatus Status =>
-        !IsRunning ? ConnectionStatus.Stopped :
+        !IsRunning ? (PauseReason != PauseReason.None ? ConnectionStatus.Paused : ConnectionStatus.Stopped) :
         Mode == EngineMode.Direct ? ConnectionStatus.Direct :
         ProxyMode ? ConnectionStatus.Proxy :
         ConnectionStatus.FolderWatcher;
 
     public bool Start()
     {
+        // Any start — Resume, the log window's Start button, a mode switch — ends a pause.
+        // Only Pause itself sets the reason, so a stale one can't outlive the user
+        // choosing to run.
+        PauseReason = PauseReason.None;
         if (IsRunning) return true;
 
         _cts = new CancellationTokenSource();
@@ -329,6 +353,35 @@ public class ProxyEngine : IDisposable
         _reconnectTask = null;
         IsRunning = false;
         OnStatusChanged();
+    }
+
+    /// <summary>
+    /// Stand down and release everything ProTee Labs could mistake for GSPro — the
+    /// GSPconnect stub and the :12321 listener — while remembering to come back.
+    /// Works whether or not we're running, so a pause can be recorded at startup
+    /// before anything has been bound.
+    /// </summary>
+    public void Pause(PauseReason reason)
+    {
+        if (reason == PauseReason.None) throw new ArgumentOutOfRangeException(nameof(reason));
+        if (PauseReason == reason && !IsRunning) return;
+
+        Stop();
+        PauseReason = reason;
+        Emit(reason == PauseReason.Gspro
+            ? "Paused: GSPro is running. ProTee Labs's GSPro connection is left to the real " +
+              "GSPconnect. VX Connector resumes when GSPro closes."
+            : "Paused. ProTee Labs's GSPro connection is free for the real GSPconnect. " +
+              "Choose Resume from the tray menu to forward shots again.");
+        OnStatusChanged();
+    }
+
+    /// <summary>Leave a pause and restart in the same mode.</summary>
+    public bool Resume()
+    {
+        if (PauseReason == PauseReason.None) return IsRunning;
+        Emit("Resuming.");
+        return Start();
     }
 
     /// <summary>Switch modes while running. Stops the current mode and starts the new one.</summary>

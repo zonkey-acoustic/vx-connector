@@ -204,11 +204,15 @@ public class MainForm : Form
                 (Color.FromArgb(33, 150, 243), DirectStatusText()),
             ConnectionStatus.Proxy or ConnectionStatus.FolderWatcher =>
                 ForwardingStatusVisuals(),
+            ConnectionStatus.Paused =>
+                (Color.FromArgb(158, 158, 158), _engine.PauseReason == PauseReason.Gspro
+                    ? "Paused while GSPro is running. Resumes when GSPro closes"
+                    : "Paused. ProTee Labs's GSPro connection is free"),
             _ =>
                 (Color.FromArgb(244, 67, 54), "Stopped"),
         };
 
-        _toggleBtn.Text = _engine.IsRunning ? "Stop" : "Start";
+        _toggleBtn.Text = _engine.IsRunning ? "Stop" : _engine.PauseReason != PauseReason.None ? "Resume" : "Start";
     }
 
     private string DirectStatusText()

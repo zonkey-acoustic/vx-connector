@@ -7,10 +7,12 @@ public class TrayApplicationContext : ApplicationContext
     private readonly MainForm _form;
     private readonly SimTarget _detectedSim;
     private readonly UpdateChecker _updates;
+    private readonly GsproWatcher _gspro;
     private readonly SynchronizationContext? _ui;
     private ConnectionStatus _currentStatus;
     private ToolStripMenuItem _updateItem = null!;
     private ToolStripMenuItem _autoUpdateItem = null!;
+    private ToolStripMenuItem _pauseItem = null!;
 
     public TrayApplicationContext(
         EngineMode startupMode = EngineMode.ProxyInfiniteTees,
@@ -53,7 +55,16 @@ public class TrayApplicationContext : ApplicationContext
         // past the early-out in ApplyStatus.
         _engine.ConnectionStateChanged += _ => ApplyStatus(_engine.Status, forceRefresh: true);
 
-        _engine.Start();
+        // If GSPro is already up, don't grab :12321 out from under it, not even briefly.
+        // Record the pause before anything is bound. The watcher resumes us when GSPro
+        // closes, as it does for a pause that happens mid-session.
+        _gspro = new GsproWatcher();
+        if (_engine.ProxyMode && GsproWatcher.IsGsproRunning())
+            _engine.Pause(PauseReason.Gspro);
+        else
+            _engine.Start();
+        _gspro.GsproRunningChanged += OnGsproRunningChanged;
+        _gspro.Start();
 
         // Defensive: ensure the tray reflects the actual engine status, even if
         // the StatusChanged event fired before we could subscribe (race).
@@ -82,6 +93,10 @@ public class TrayApplicationContext : ApplicationContext
                     : Color.FromArgb(156, 39, 176), ProxyStatusText()),
             ConnectionStatus.FolderWatcher =>
                 (Color.FromArgb(0, 150, 136), ForwardingStatusText("Legacy")),
+            ConnectionStatus.Paused =>
+                (Color.FromArgb(158, 158, 158), _engine.PauseReason == PauseReason.Gspro
+                    ? "VX Connector — Paused while GSPro is running"
+                    : "VX Connector — Paused"),
             _ =>
                 (Color.FromArgb(244, 67, 54), "VX Connector — Stopped"),
         };
@@ -192,6 +207,13 @@ public class TrayApplicationContext : ApplicationContext
         menu.Items.Add(new ToolStripSeparator());
 
         menu.Items.Add("Show Log", null, (_, _) => ShowForm());
+
+        // Lets a GSPro owner hand the GSPro lane back without quitting. The GSPro watcher
+        // usually does this for them; this is the manual override either way.
+        _pauseItem = new ToolStripMenuItem("Pause");
+        _pauseItem.Click += (_, _) => TogglePause();
+        menu.Items.Add(_pauseItem);
+
         menu.Items.Add("Check for Updates…", null, (_, _) => CheckForUpdatesNow());
         menu.Items.Add(new ToolStripSeparator());
 
@@ -231,6 +253,11 @@ public class TrayApplicationContext : ApplicationContext
             // Read from the registry each time: the user can also remove the entry via
             // Task Manager's Startup tab, and the menu must reflect that.
             startWithWindowsItem.Checked = StartupRegistration.IsEnabled();
+
+            _pauseItem.Text =
+                _engine.PauseReason != PauseReason.None ? "Resume" :
+                _engine.IsRunning ? "Pause" :
+                "Start";
 
             toDrillsItem.Visible = _engine.Mode != EngineMode.ProxyDrills;
             toIteesItem.Visible = _engine.Mode != EngineMode.ProxyInfiniteTees;
@@ -378,8 +405,80 @@ public class TrayApplicationContext : ApplicationContext
         }
     }
 
+    private void TogglePause()
+    {
+        if (_engine.PauseReason != PauseReason.None)
+            _engine.Resume();
+        else if (_engine.IsRunning)
+            _engine.Pause(PauseReason.User);
+        else
+            _engine.Start();
+        ApplyStatus(_engine.Status, forceRefresh: true);
+    }
+
+    /// <summary>
+    /// Raised from the watcher's timer thread. The engine's Start/Stop run on the UI
+    /// thread everywhere else (menu, log window), so marshal before touching it.
+    /// </summary>
+    private void OnGsproRunningChanged(bool running)
+    {
+        if (_ui is not null && _ui != SynchronizationContext.Current)
+        {
+            _ui.Post(_ => ApplyGsproRunning(running), null);
+            return;
+        }
+        ApplyGsproRunning(running);
+    }
+
+    /// <summary>
+    /// Acts on transitions only, and only on state the watcher owns.
+    /// <list type="bullet">
+    /// <item>It pauses only a running Proxy session. A user-stopped engine stays
+    /// stopped, and Folder Watcher binds nothing GSPro needs.</item>
+    /// <item>It resumes only a pause it caused. A user pause outlasts GSPro.</item>
+    /// </list>
+    /// If the user picks Resume while GSPro is still up, that override stands until
+    /// GSPro next starts, because nothing fires again until the state changes.
+    /// </summary>
+    private void ApplyGsproRunning(bool running)
+    {
+        if (running)
+        {
+            if (!_engine.IsRunning || !_engine.ProxyMode) return;
+            _engine.Pause(PauseReason.Gspro);
+            _tray.ShowBalloonTip(
+                8_000,
+                "GSPro detected — VX Connector paused",
+                "ProTee Labs can connect to GSPro now. VX Connector resumes when GSPro closes.",
+                ToolTipIcon.Info);
+        }
+        else
+        {
+            if (_engine.PauseReason != PauseReason.Gspro) return;
+            if (!_engine.Resume()) return;   // the reason is already in the log window
+            var (sim, _) = _engine.ResolveForwardTarget();
+            _tray.ShowBalloonTip(
+                5_000,
+                "GSPro closed — VX Connector resumed",
+                $"Shots from ProTee Labs go to {sim} again.",
+                ToolTipIcon.Info);
+        }
+        ApplyStatus(_engine.Status, forceRefresh: true);
+    }
+
     private void SwitchEngineMode(EngineMode mode)
     {
+        // Paused: switch target without un-pausing. The user picked a sim, not "resume",
+        // and un-pausing here would put the stub back in front of a running GSPro.
+        if (_engine.PauseReason != PauseReason.None)
+        {
+            _engine.Mode = mode;
+            UserSettings.SaveLastMode(mode);
+            _engine.RaiseLog($"Target changed to {_engine.ResolveForwardTarget().sim}; still paused.");
+            ApplyStatus(_engine.Status, forceRefresh: true);
+            return;
+        }
+
         _engine.RestartIn(mode);
         UserSettings.SaveLastMode(mode);
         ApplyStatus(_engine.Status, forceRefresh: true);
@@ -395,6 +494,7 @@ public class TrayApplicationContext : ApplicationContext
 
     private void Quit()
     {
+        _gspro.Dispose();
         _engine.Stop();
         _tray.Visible = false;
         _tray.Dispose();
@@ -407,6 +507,7 @@ public class TrayApplicationContext : ApplicationContext
         if (disposing)
         {
             _updates.Dispose();
+            _gspro.Dispose();
             _tray.Dispose();
             _engine.Dispose();
             _form.Dispose();
